@@ -3,7 +3,7 @@ package asr
 import (
 	"sync"
 
-	"voicekit/types"
+	"github.com/SamyRai/voicekit/types"
 )
 
 // AudioBuffer implements the AudioBufferInterface with circular buffer optimization

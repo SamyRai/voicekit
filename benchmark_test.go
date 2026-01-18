@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"voicekit/audio"
+	"github.com/SamyRai/voicekit/audio"
 )
 
 // TestBenchmarkRunner tests the benchmark runner functionality

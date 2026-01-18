@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"voicekit/speaker/domain"
+	"github.com/SamyRai/voicekit/speaker/domain"
 )
 
 // GetSpeakerEmbedding returns the embedding for a specific speaker

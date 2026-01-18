@@ -6,9 +6,9 @@ import (
 	"os"
 
 	"github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
-	"voicekit/indexing"
-	"voicekit/speaker/application"
-	"voicekit/speaker/domain"
+	"github.com/SamyRai/voicekit/indexing"
+	"github.com/SamyRai/voicekit/speaker/application"
+	"github.com/SamyRai/voicekit/speaker/domain"
 )
 
 // NewManager creates speaker recognition manager

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"voicekit/speaker/domain"
+	"github.com/SamyRai/voicekit/speaker/domain"
 )
 
 // SpeakerDatabaseAdapter adapts the existing speaker database to the domain repository interface

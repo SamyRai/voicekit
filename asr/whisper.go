@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"voicekit/types"
+	"github.com/SamyRai/voicekit/types"
 )
 
 // WhisperModel implements the Model interface for Whisper

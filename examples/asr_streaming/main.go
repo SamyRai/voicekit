@@ -7,8 +7,7 @@ import (
 	"math"
 	"time"
 
-	"voicekit"
-	"voicekit/types"
+	"github.com/SamyRai/voicekit"
 )
 
 func main() {

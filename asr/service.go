@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"voicekit"
-	"voicekit/types"
+	"github.com/SamyRai/voicekit"
+	"github.com/SamyRai/voicekit/types"
 )
 
 // Service provides real-time streaming ASR functionality
@@ -198,12 +198,12 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	// Get or create streaming state
 	state, err := s.streaming.GetState(sessionID)
 	if err != nil {
-		return nil, NewASRErrorWithSession("streaming_state", sessionID, err)
+		return nil, voicekit.NewASRErrorWithSession("streaming_state", sessionID, err)
 	}
 
 	// Add audio to buffer
 	if err := state.Buffer.Append(audio); err != nil {
-		return nil, NewASRErrorWithSession("buffer_append", sessionID, err)
+		return nil, voicekit.NewASRErrorWithSession("buffer_append", sessionID, err)
 	}
 
 	// Process VAD if available
@@ -248,7 +248,7 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 			if s.metrics != nil && s.metrics.ErrorsTotal != nil {
 				s.metrics.ErrorsTotal.Inc()
 			}
-			return nil, NewASRErrorWithSession("processing", sessionID, err)
+			return nil, voicekit.NewASRErrorWithSession("processing", sessionID, err)
 		}
 
 		// Update metrics
@@ -298,7 +298,7 @@ func (s *Service) processWithASR(ctx context.Context, sessionID string, state *t
 	// Process audio with selected model
 	transcription, err := model.ProcessAudio(ctx, chunk, state)
 	if err != nil {
-		return nil, NewASRError("model_processing", err)
+		return nil, voicekit.NewASRError("model_processing", err)
 	}
 
 	return transcription, nil

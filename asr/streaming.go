@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"voicekit/types"
+	"github.com/SamyRai/voicekit/types"
 )
 
 // StreamingManager handles streaming ASR sessions

@@ -1,4 +1,4 @@
-module voicekit
+module github.com/SamyRai/voicekit
 
 go 1.25.1
 

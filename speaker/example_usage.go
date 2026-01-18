@@ -8,7 +8,7 @@ import (
 	"log"
 	"math/rand"
 
-	"voicekit/indexing"
+	"github.com/SamyRai/voicekit/indexing"
 )
 
 // Example demonstrates how to use the generic HNSW vector indexer

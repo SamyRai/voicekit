@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"voicekit/speaker/domain"
+	"github.com/SamyRai/voicekit/speaker/domain"
 )
 
 // SherpaEmbeddingExtractorAdapter adapts the existing Sherpa embedding extractor to the domain interface

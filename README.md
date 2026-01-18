@@ -331,9 +331,9 @@ import (
     "fmt"
     "log"
 
-    "voicekit"
-    "voicekit/audio"
-    "voicekit/speaker"
+    "github.com/SamyRai/voicekit"
+    "github.com/SamyRai/voicekit/audio"
+    "github.com/SamyRai/voicekit/speaker"
 )
 
 func main() {
@@ -411,7 +411,7 @@ import (
     "log"
     "time"
 
-    "voicekit"
+    "github.com/SamyRai/voicekit"
 )
 
 func main() {
@@ -486,7 +486,7 @@ func generateAudioChunk() []float32 {
 package main
 
 import (
-    "voicekit/speaker"
+    "github.com/SamyRai/voicekit/speaker"
 )
 
 func main() {
@@ -531,7 +531,7 @@ func main() {
 package main
 
 import (
-    "voicekit/audio"
+    "github.com/SamyRai/voicekit/audio"
 )
 
 func main() {
@@ -573,7 +573,7 @@ func main() {
 package main
 
 import (
-    "voicekit/diarization"
+    "github.com/SamyRai/voicekit/diarization"
 )
 
 func main() {
@@ -1142,9 +1142,9 @@ This library is released under the MIT License. See LICENSE file for details.
 
 When migrating from the original ASR server's internal packages:
 
-1. Replace `internal/speaker` imports with `voicekit/speaker`
-2. Replace `internal/audio` imports with `voicekit/audio`
-3. Replace `internal/diarization` imports with `voicekit/diarization`
+1. Replace `internal/speaker` imports with `github.com/SamyRai/voicekit/speaker`
+2. Replace `internal/audio` imports with `github.com/SamyRai/voicekit/audio`
+3. Replace `internal/diarization` imports with `github.com/SamyRai/voicekit/diarization`
 4. Update configuration structures to use `voicekit.Config`
 5. Remove dependencies on `internal/logger` and `internal/config`
 
@@ -1155,5 +1155,5 @@ Example migration:
 import "asr_server/internal/speaker"
 
 // After
-import "voicekit/speaker"
+import "github.com/SamyRai/voicekit/speaker"
 ```

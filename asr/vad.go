@@ -1,7 +1,7 @@
 package asr
 
 import (
-	"voicekit/types"
+	"github.com/SamyRai/voicekit/types"
 )
 
 // VADService provides voice activity detection

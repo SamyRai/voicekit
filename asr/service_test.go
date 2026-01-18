@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"voicekit"
-	"voicekit/types"
+	"github.com/SamyRai/voicekit"
+	"github.com/SamyRai/voicekit/types"
 )
 
 func TestASRService_Basic(t *testing.T) {

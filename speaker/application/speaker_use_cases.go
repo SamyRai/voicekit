@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"voicekit/speaker/domain"
+	"github.com/SamyRai/voicekit/speaker/domain"
 )
 
 // Logger interface for application layer logging

@@ -2,7 +2,7 @@ package asr
 
 import (
 	"testing"
-	"voicekit/types"
+	"github.com/SamyRai/voicekit/types"
 )
 
 func TestAudioBuffer_Append(t *testing.T) {

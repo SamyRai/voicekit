@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"voicekit/audio"
-	"voicekit/diarization"
-	"voicekit/speaker"
-	"voicekit/types"
+	"github.com/SamyRai/voicekit/audio"
+	"github.com/SamyRai/voicekit/diarization"
+	"github.com/SamyRai/voicekit/speaker"
+	"github.com/SamyRai/voicekit/types"
 )
 
 // VoiceKit provides a unified interface for all voice processing operations
