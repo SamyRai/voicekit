@@ -18,6 +18,9 @@ func NewSherpaExtractorAdapter(config *sherpa_onnx.SpeakerEmbeddingExtractorConf
 }
 
 func (s *SherpaExtractorAdapter) CreateStream() SpeakerStream {
+	if s == nil || s.extractor == nil {
+		return nil
+	}
 	stream := s.extractor.CreateStream()
 	if stream == nil {
 		return nil
@@ -26,6 +29,9 @@ func (s *SherpaExtractorAdapter) CreateStream() SpeakerStream {
 }
 
 func (s *SherpaExtractorAdapter) IsReady(stream SpeakerStream) bool {
+	if s == nil || s.extractor == nil {
+		return false
+	}
 	if adapter, ok := stream.(*SherpaStreamAdapter); ok {
 		return s.extractor.IsReady(adapter.stream)
 	}
@@ -33,6 +39,9 @@ func (s *SherpaExtractorAdapter) IsReady(stream SpeakerStream) bool {
 }
 
 func (s *SherpaExtractorAdapter) Compute(stream SpeakerStream) []float32 {
+	if s == nil || s.extractor == nil {
+		return nil
+	}
 	if adapter, ok := stream.(*SherpaStreamAdapter); ok {
 		return s.extractor.Compute(adapter.stream)
 	}
@@ -40,12 +49,16 @@ func (s *SherpaExtractorAdapter) Compute(stream SpeakerStream) []float32 {
 }
 
 func (s *SherpaExtractorAdapter) Dim() int {
+	if s == nil || s.extractor == nil {
+		return 0
+	}
 	return s.extractor.Dim()
 }
 
 func (s *SherpaExtractorAdapter) Delete() {
-	if s.extractor != nil {
+	if s != nil && s.extractor != nil {
 		sherpa_onnx.DeleteSpeakerEmbeddingExtractor(s.extractor)
+		s.extractor = nil
 	}
 }
 
@@ -63,28 +76,43 @@ func NewSherpaManagerAdapter(dim int) *SherpaManagerAdapter {
 }
 
 func (s *SherpaManagerAdapter) RegisterV(speakerID string, embeddings [][]float32) bool {
+	if s == nil || s.manager == nil {
+		return false
+	}
 	return s.manager.RegisterV(speakerID, embeddings)
 }
 
 func (s *SherpaManagerAdapter) Search(embedding []float32, threshold float32) string {
+	if s == nil || s.manager == nil {
+		return ""
+	}
 	return s.manager.Search(embedding, threshold)
 }
 
 func (s *SherpaManagerAdapter) Remove(speakerID string) {
-	s.manager.Remove(speakerID)
+	if s != nil && s.manager != nil {
+		s.manager.Remove(speakerID)
+	}
 }
 
 func (s *SherpaManagerAdapter) Verify(speakerID string, embedding []float32, threshold float32) bool {
+	if s == nil || s.manager == nil {
+		return false
+	}
 	return s.manager.Verify(speakerID, embedding, threshold)
 }
 
 func (s *SherpaManagerAdapter) Contains(speakerID string) bool {
+	if s == nil || s.manager == nil {
+		return false
+	}
 	return s.manager.Contains(speakerID)
 }
 
 func (s *SherpaManagerAdapter) Delete() {
-	if s.manager != nil {
+	if s != nil && s.manager != nil {
 		sherpa_onnx.DeleteSpeakerEmbeddingManager(s.manager)
+		s.manager = nil
 	}
 }
 
@@ -94,15 +122,22 @@ type SherpaStreamAdapter struct {
 }
 
 func (s *SherpaStreamAdapter) AcceptWaveform(sampleRate int, samples []float32) {
+	if s == nil || s.stream == nil || sampleRate <= 0 || len(samples) == 0 {
+		return
+	}
 	s.stream.AcceptWaveform(sampleRate, samples)
 }
 
 func (s *SherpaStreamAdapter) InputFinished() {
+	if s == nil || s.stream == nil {
+		return
+	}
 	s.stream.InputFinished()
 }
 
 func (s *SherpaStreamAdapter) Delete() {
 	if s.stream != nil {
 		sherpa_onnx.DeleteOnlineStream(s.stream)
+		s.stream = nil
 	}
 }

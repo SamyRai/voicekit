@@ -1,6 +1,7 @@
 package diarization
 
 import (
+	"context"
 	"math"
 	"testing"
 )
@@ -40,19 +41,19 @@ func benchmarkClustering(b *testing.B, numSegments int) {
 
 	config := &DiarizationConfig{
 		Enabled:             true,
+		Backend:             BackendBasic,
 		SimilarityThreshold: 0.7,
 		MaxSpeakers:         10,
 	}
+	config.ApplyDefaults()
 
-	manager := &Manager{
-		config: config,
-	}
+	backend := newBasicBackend(config, nil, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_ = manager.performClustering(embeddings)
+		_ = backend.performClustering(embeddings)
 	}
 }
 
@@ -82,10 +83,11 @@ func BenchmarkAudioSegmentation(b *testing.B) {
 	}
 
 	config := &DiarizationConfig{
-		MinSegmentLength:      1.0,
-		MaxSegmentLength:      30.0,
-		SilenceThreshold:      0.5,
-		SimilarityThreshold:   0.7,
+		Backend:             BackendBasic,
+		MinSegmentLength:    1.0,
+		MaxSegmentLength:    30.0,
+		SilenceThreshold:    0.5,
+		SimilarityThreshold: 0.7,
 	}
 
 	segmenter := NewSegmenter(config)
@@ -101,11 +103,8 @@ func BenchmarkAudioSegmentation(b *testing.B) {
 	}
 }
 
-// BenchmarkEmbeddingExtraction benchmarks embedding extraction simulation
+// BenchmarkEmbeddingExtraction benchmarks fake extractor allocation patterns.
 func BenchmarkEmbeddingExtraction(b *testing.B) {
-	// Since we don't have actual embedding extraction in diarization,
-	// we'll benchmark the mock embedding generation that would happen
-
 	numSegments := 20
 	dim := 192
 
@@ -117,8 +116,7 @@ func BenchmarkEmbeddingExtraction(b *testing.B) {
 		for j := 0; j < numSegments; j++ {
 			embedding := make([]float32, dim)
 			for k := 0; k < dim; k++ {
-				// Simulate embedding extraction computation
-				embedding[k] = float32(j%5) * 0.2 // Mock embedding
+				embedding[k] = float32(j%5) * 0.2
 			}
 			embeddings[j] = embedding
 		}
@@ -143,6 +141,16 @@ func (m *mockSpeakerDatabase) CalculateSimilarity(embedding1, embedding2 []float
 
 func (m *mockSpeakerDatabase) RegisterSpeakerEmbedding(speakerID string, embedding []float32) error {
 	return nil
+}
+
+type benchmarkEmbeddingExtractor struct{}
+
+func (benchmarkEmbeddingExtractor) ExtractEmbedding(ctx context.Context, audioData []float32, sampleRate int) ([]float32, error) {
+	embedding := make([]float32, 192)
+	for i := range embedding {
+		embedding[i] = float32((len(audioData)+i)%17) / 17
+	}
+	return embedding, nil
 }
 
 // BenchmarkDiarizationPipeline benchmarks the full diarization pipeline
@@ -171,6 +179,7 @@ func BenchmarkDiarizationPipeline(b *testing.B) {
 
 	config := &DiarizationConfig{
 		Enabled:               true,
+		Backend:               BackendBasic,
 		MinSegmentLength:      0.5,
 		MaxSegmentLength:      10.0,
 		SilenceThreshold:      0.3,
@@ -180,9 +189,11 @@ func BenchmarkDiarizationPipeline(b *testing.B) {
 		OverlapThreshold:      0.2,
 	}
 
-	// Use mock speaker database for benchmarking
 	mockDB := &mockSpeakerDatabase{}
-	manager := NewManager(config, mockDB)
+	manager, err := NewManagerWithBackend(config, mockDB, benchmarkEmbeddingExtractor{})
+	if err != nil {
+		b.Fatalf("failed to create manager: %v", err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()

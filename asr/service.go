@@ -6,13 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SamyRai/voicekit"
 	"github.com/SamyRai/voicekit/types"
 )
 
 // Service provides real-time streaming ASR functionality
 type Service struct {
-	config     *voicekit.ASRConfig
+	config     *Config
 	models     map[string]Model
 	vadService *VADService
 	streaming  *StreamingManager
@@ -21,40 +20,25 @@ type Service struct {
 	mu sync.RWMutex
 }
 
-// Config holds ASR service configuration
-type Config struct {
-	DefaultModel         string `json:"default_model"`
-	Language             string `json:"language"`
-	Quantization         string `json:"quantization"`
-	MaxConcurrentStreams int    `json:"max_concurrent_streams"`
-	StreamTimeout        time.Duration `json:"stream_timeout"`
-	ChunkSize            int    `json:"chunk_size"`
-	VADProvider          string `json:"vad_provider"`
+type finalizableModel interface {
+	FinishAudio(ctx context.Context, audio []float32, state *types.StreamingState) (*types.Transcription, error)
 }
 
 // Model represents an ASR model interface
-type Model interface {
-	Name() string
-	Language() string
-	Quantization() string
-	ProcessAudio(ctx context.Context, audio []float32, state *types.StreamingState) (*types.Transcription, error)
-	SupportsLanguage(lang string) bool
-	Latency() time.Duration
-	Close() error
-}
+type Model = types.ASRModel
 
 // Use types from voicekit/types package
 
 // ASRMetrics holds ASR service metrics
 type ASRMetrics struct {
-	ProcessLatency   Histogram
-	E2ELatency       Histogram
-	TTFT             Histogram
-	RequestsTotal    Counter
-	ActiveStreams    Gauge
-	ProcessedChunks  Counter
-	ErrorsTotal      Counter
-	ConfidenceScore  Histogram
+	ProcessLatency  Histogram
+	E2ELatency      Histogram
+	TTFT            Histogram
+	RequestsTotal   Counter
+	ActiveStreams   Gauge
+	ProcessedChunks Counter
+	ErrorsTotal     Counter
+	ConfidenceScore Histogram
 }
 
 // Define basic metric interfaces to avoid circular imports
@@ -75,9 +59,19 @@ type Gauge interface {
 }
 
 // NewService creates a new ASR service
-func NewService(config *voicekit.ASRConfig) (*Service, error) {
+func NewService(config *Config) (*Service, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config cannot be nil")
+	}
+	config.ApplyDefaults()
+	if !config.Enabled {
+		return nil, fmt.Errorf("ASR service cannot be initialized when ASR is disabled")
+	}
+	if config.Backend != BackendSherpaOnline {
+		return nil, fmt.Errorf("streaming ASR service requires backend %q, got %q", BackendSherpaOnline, config.Backend)
+	}
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid ASR config: %w", err)
 	}
 
 	service := &Service{
@@ -86,21 +80,20 @@ func NewService(config *voicekit.ASRConfig) (*Service, error) {
 		metrics: &ASRMetrics{},
 	}
 
-	// Initialize VAD service
-	vadService, err := NewVADService(&VADConfig{
-		Provider: config.VADProvider,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize VAD service: %w", err)
+	if config.VADProvider != VADProviderNone {
+		vadService, err := NewVADService(vadConfigFromASR(config))
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize VAD service: %w", err)
+		}
+		service.vadService = vadService
 	}
-	service.vadService = vadService
 
 	// Initialize streaming manager
 	streamingConfig := &types.StreamingConfig{
 		ChunkSize:          config.ChunkSize,
 		OverlapSize:        config.ChunkSize / 10,
 		BufferSize:         config.ChunkSize * 3,
-		SampleRate:         16000,
+		SampleRate:         config.SampleRate,
 		StreamTimeout:      time.Duration(config.StreamTimeout) * time.Second,
 		IdleTimeout:        30 * time.Second,
 		FlushInterval:      100 * time.Millisecond,
@@ -110,9 +103,11 @@ func NewService(config *voicekit.ASRConfig) (*Service, error) {
 	}
 	service.streaming = NewStreamingManager(streamingConfig)
 
-	// Register default Whisper model
-	whisperModel := NewWhisperModel(config.DefaultModel, config.Language, config.Quantization)
-	if err := service.RegisterModel(whisperModel); err != nil {
+	model, err := NewSherpaOnlineModel(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize Sherpa ASR model: %w", err)
+	}
+	if err := service.RegisterModel(model); err != nil {
 		return nil, fmt.Errorf("failed to register default model: %w", err)
 	}
 
@@ -198,12 +193,12 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	// Get or create streaming state
 	state, err := s.streaming.GetState(sessionID)
 	if err != nil {
-		return nil, voicekit.NewASRErrorWithSession("streaming_state", sessionID, err)
+		return nil, newSessionError("streaming_state", sessionID, err)
 	}
 
 	// Add audio to buffer
 	if err := state.Buffer.Append(audio); err != nil {
-		return nil, voicekit.NewASRErrorWithSession("buffer_append", sessionID, err)
+		return nil, newSessionError("buffer_append", sessionID, err)
 	}
 
 	// Process VAD if available
@@ -248,7 +243,7 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 			if s.metrics != nil && s.metrics.ErrorsTotal != nil {
 				s.metrics.ErrorsTotal.Inc()
 			}
-			return nil, voicekit.NewASRErrorWithSession("processing", sessionID, err)
+			return nil, newSessionError("processing", sessionID, err)
 		}
 
 		// Update metrics
@@ -298,7 +293,7 @@ func (s *Service) processWithASR(ctx context.Context, sessionID string, state *t
 	// Process audio with selected model
 	transcription, err := model.ProcessAudio(ctx, chunk, state)
 	if err != nil {
-		return nil, voicekit.NewASRError("model_processing", err)
+		return nil, newError("model_processing", err)
 	}
 
 	return transcription, nil
@@ -328,7 +323,7 @@ func (s *Service) finalizeTranscription(ctx context.Context, sessionID string, s
 	remainingAudio := make([]float32, len(chunk))
 	copy(remainingAudio, chunk)
 
-	finalResult, err := model.ProcessAudio(ctx, remainingAudio, state)
+	finalResult, err := processFinalAudio(ctx, model, remainingAudio, state)
 	if err != nil {
 		return nil, fmt.Errorf("finalization failed: %w", err)
 	}
@@ -340,6 +335,13 @@ func (s *Service) finalizeTranscription(ctx context.Context, sessionID string, s
 	state.LastActivity = time.Now()
 
 	return finalResult, nil
+}
+
+func processFinalAudio(ctx context.Context, model Model, audio []float32, state *types.StreamingState) (*types.Transcription, error) {
+	if finalizable, ok := model.(finalizableModel); ok {
+		return finalizable.FinishAudio(ctx, audio, state)
+	}
+	return model.ProcessAudio(ctx, audio, state)
 }
 
 // SelectModel selects the best model for given requirements
@@ -397,6 +399,12 @@ func (s *Service) Close() error {
 
 	var errs []error
 
+	if s.streaming != nil {
+		if err := s.streaming.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close streaming manager: %w", err))
+		}
+	}
+
 	for name, model := range s.models {
 		if err := model.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close model %s: %w", name, err))
@@ -406,12 +414,6 @@ func (s *Service) Close() error {
 	if s.vadService != nil {
 		if err := s.vadService.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close VAD service: %w", err))
-		}
-	}
-
-	if s.streaming != nil {
-		if err := s.streaming.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close streaming manager: %w", err))
 		}
 	}
 

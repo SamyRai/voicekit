@@ -122,6 +122,128 @@ func TestHNSWIndex_Remove(t *testing.T) {
 	t.Logf("Vector removed successfully")
 }
 
+func TestHNSWIndex_RemoveMissingDoesNotCreateMapping(t *testing.T) {
+	index, err := NewHNSWIndex(&Config{
+		Dimension:      4,
+		MaxElements:    10,
+		M:              4,
+		EfConstruction: 8,
+		EfSearch:       8,
+		DistanceMetric: Cosine,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create HNSW index: %v", err)
+	}
+	defer index.Close()
+
+	if err := index.Remove(context.Background(), "missing"); err != nil {
+		t.Fatalf("missing removal should be a no-op: %v", err)
+	}
+	if index.mapper.Size() != 0 {
+		t.Fatalf("missing removal should not allocate an ID mapping")
+	}
+}
+
+func TestHNSWIndex_SearchEmptyReturnsNoResults(t *testing.T) {
+	index, err := NewHNSWIndex(&Config{
+		Dimension:      4,
+		MaxElements:    10,
+		M:              4,
+		EfConstruction: 8,
+		EfSearch:       8,
+		DistanceMetric: Cosine,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create HNSW index: %v", err)
+	}
+	defer index.Close()
+
+	results, err := index.Search(context.Background(), []float32{1, 0, 0, 0}, 5, 0)
+	if err != nil {
+		t.Fatalf("empty search should not fail: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results from empty index, got %d", len(results))
+	}
+}
+
+func TestHNSWIndex_SizeTracksLiveMappings(t *testing.T) {
+	index, err := NewHNSWIndex(&Config{
+		Dimension:      4,
+		MaxElements:    10,
+		M:              4,
+		EfConstruction: 8,
+		EfSearch:       8,
+		DistanceMetric: Cosine,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create HNSW index: %v", err)
+	}
+	defer index.Close()
+
+	ctx := context.Background()
+	if err := index.Add(ctx, "vector", []float32{1, 0, 0, 0}); err != nil {
+		t.Fatalf("failed to add vector: %v", err)
+	}
+	if err := index.Remove(ctx, "vector"); err != nil {
+		t.Fatalf("failed to remove vector: %v", err)
+	}
+
+	size, err := index.Size(ctx)
+	if err != nil {
+		t.Fatalf("failed to get size: %v", err)
+	}
+	if size != 0 {
+		t.Fatalf("expected logical size 0 after removal, got %d", size)
+	}
+}
+
+func TestHNSWIndex_OperationsAfterCloseFail(t *testing.T) {
+	index, err := NewHNSWIndex(&Config{
+		Dimension:      4,
+		MaxElements:    10,
+		M:              4,
+		EfConstruction: 8,
+		EfSearch:       8,
+		DistanceMetric: Cosine,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create HNSW index: %v", err)
+	}
+	if err := index.Close(); err != nil {
+		t.Fatalf("failed to close index: %v", err)
+	}
+	if err := index.Close(); err != nil {
+		t.Fatalf("second close should be idempotent: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := index.Add(ctx, "vector", []float32{1, 0, 0, 0}); err == nil {
+		t.Fatalf("add after close should fail")
+	}
+	if _, err := index.Search(ctx, []float32{1, 0, 0, 0}, 1, 0); err == nil {
+		t.Fatalf("search after close should fail")
+	}
+	if _, err := index.Size(ctx); err == nil {
+		t.Fatalf("size after close should fail")
+	}
+}
+
+func TestSimilarityFromDistance(t *testing.T) {
+	if got := similarityFromDistance(Cosine, 0.25); math.Abs(float64(got-0.75)) > 0.001 {
+		t.Fatalf("unexpected cosine similarity: %f", got)
+	}
+	if got := similarityFromDistance(L2, 0); got != 1 {
+		t.Fatalf("expected exact L2 match to have similarity 1, got %f", got)
+	}
+	if got := similarityFromDistance(InnerProduct, 2); got != 1 {
+		t.Fatalf("expected inner product similarity to clamp to 1, got %f", got)
+	}
+	if got := similarityFromDistance(InnerProduct, -1); got != 0 {
+		t.Fatalf("expected inner product similarity to clamp to 0, got %f", got)
+	}
+}
+
 // TestConfig_Validation tests configuration validation
 func TestConfig_Validation(t *testing.T) {
 	tests := []struct {
@@ -226,6 +348,13 @@ func TestIDMapper(t *testing.T) {
 	// Test size
 	if mapper.Size() != 1 { // Only test2 should remain
 		t.Errorf("Expected size 1 after removal, got %d", mapper.Size())
+	}
+
+	if _, exists := mapper.LookupIntID("missing"); exists {
+		t.Errorf("missing lookup should not exist")
+	}
+	if mapper.Size() != 1 {
+		t.Errorf("missing lookup should not create mappings")
 	}
 }
 

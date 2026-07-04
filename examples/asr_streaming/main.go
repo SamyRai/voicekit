@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"time"
 
 	"github.com/SamyRai/voicekit"
@@ -14,7 +15,16 @@ func main() {
 	fmt.Println("🎤 VoiceKit ASR Streaming Example")
 	fmt.Println("==================================")
 
-	// Configure VoiceKit with ASR enabled
+	tokensPath := os.Getenv("VOICEKIT_ASR_TOKENS")
+	encoderPath := os.Getenv("VOICEKIT_ASR_ENCODER")
+	decoderPath := os.Getenv("VOICEKIT_ASR_DECODER")
+	joinerPath := os.Getenv("VOICEKIT_ASR_JOINER")
+	if tokensPath == "" || encoderPath == "" || decoderPath == "" || joinerPath == "" {
+		fmt.Println("Sherpa ASR model paths are not configured.")
+		fmt.Println("Set VOICEKIT_ASR_TOKENS, VOICEKIT_ASR_ENCODER, VOICEKIT_ASR_DECODER, and VOICEKIT_ASR_JOINER to run this example.")
+		return
+	}
+
 	config := &voicekit.Config{
 		Audio: voicekit.AudioConfig{
 			SampleRate:      16000,
@@ -23,13 +33,20 @@ func main() {
 		},
 		ASR: voicekit.ASRConfig{
 			Enabled:              true,
-			DefaultModel:         "whisper_large_v3",
+			Backend:              "sherpa_online",
+			DefaultModel:         "sherpa_online",
 			Language:             "en",
-			Quantization:         "int8",
+			Quantization:         "float32",
 			MaxConcurrentStreams: 10,
-			StreamTimeout:        300, // 5 minutes
+			StreamTimeout:        300,   // 5 minutes
 			ChunkSize:            16000, // 1 second chunks
-			VADProvider:          "ten_vad",
+			Online: voicekit.OnlineConfig{
+				TokensPath:  tokensPath,
+				EncoderPath: encoderPath,
+				DecoderPath: decoderPath,
+				JoinerPath:  joinerPath,
+			},
+			VADProvider: "none",
 		},
 	}
 
@@ -108,10 +125,9 @@ func demonstrateASRStreaming(asrService voicekit.ASRService) {
 
 	fmt.Println()
 	fmt.Println("📊 ASR Streaming Performance Summary:")
-	fmt.Println("- Latency: ~500ms per 1-second chunk (benchmark result)")
-	fmt.Println("- Memory: ~100KB per operation")
-	fmt.Println("- Real-time factor: <0.5 (system keeps up with audio stream)")
-	fmt.Println("- VAD integration: Automatic speech/non-speech detection")
+	fmt.Println("- Results depend on the configured Sherpa model and runtime provider")
+	fmt.Println("- Confidence is 0 when the Sherpa binding does not expose calibrated confidence")
+	fmt.Println("- VAD is disabled in this example unless configured separately")
 }
 
 func generateSyntheticAudioChunk(chunkIndex int) []float32 {
@@ -171,6 +187,6 @@ func generateSpeechLikeAudio(audio []float32, energy float32) {
 		sample /= float64(len(frequencies)) // Normalize
 
 		// Apply energy level and add some noise
-		audio[i] = float32(sample)*energy + (float32(sample)*0.1*energy)
+		audio[i] = float32(sample)*energy + (float32(sample) * 0.1 * energy)
 	}
 }

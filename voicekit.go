@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"time"
 
+	voiceasr "github.com/SamyRai/voicekit/asr"
 	"github.com/SamyRai/voicekit/audio"
 	"github.com/SamyRai/voicekit/diarization"
 	"github.com/SamyRai/voicekit/speaker"
+	voicetts "github.com/SamyRai/voicekit/tts"
 	"github.com/SamyRai/voicekit/types"
 )
 
@@ -18,8 +20,11 @@ type VoiceKit struct {
 	config         *Config
 	speakerManager *speaker.Manager
 	audioConverter *audio.Converter
+	audioResampler *audio.Resampler
 	diarizationMgr *diarization.Manager
 	asrService     ASRService
+	transcriber    types.Transcriber
+	synthesizer    types.SpeechSynthesizer
 	metrics        *MetricsCollector
 }
 
@@ -28,6 +33,7 @@ func NewVoiceKit(config *Config) (*VoiceKit, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
+	config.ApplyDefaults()
 
 	// Validate configuration at initialization
 	if err := config.Validate(); err != nil {
@@ -65,77 +71,120 @@ func NewVoiceKit(config *Config) (*VoiceKit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create audio converter: %w", err)
 	}
-
-	// Initialize diarization manager
-	diarizationConfig := &diarization.DiarizationConfig{
-		Enabled:               config.Diarization.Enabled,
-		MinSegmentLength:      config.Diarization.MinSegmentLength,
-		MaxSegmentLength:      config.Diarization.MaxSegmentLength,
-		SilenceThreshold:      config.Diarization.SilenceThreshold,
-		SimilarityThreshold:   config.Diarization.SimilarityThreshold,
-		MaxSpeakers:           config.Diarization.MaxSpeakers,
-		ReassignmentThreshold: config.Diarization.ReassignmentThreshold,
-		OverlapThreshold:      config.Diarization.OverlapThreshold,
-		Logger:                config.Diarization.Logger,
-	}
+	audioResampler := audio.NewResampler(&audio.ResampleConfig{
+		Method:       audio.MethodCubic,
+		Quality:      audio.QualityMedium,
+		FilterLength: 16,
+		UseSIMD:      false,
+	})
 
 	var diarizationMgr *diarization.Manager
-	if speakerMgr != nil {
-		// Create a speaker database adapter
-		speakerDB := &speakerDatabaseAdapter{manager: speakerMgr}
-		diarizationMgr = diarization.NewManager(diarizationConfig, speakerDB)
-	} else {
-		// Create a mock speaker database for diarization
-		mockDB := &mockSpeakerDatabase{}
-		diarizationMgr = diarization.NewManager(diarizationConfig, mockDB)
+	if config.Diarization.Enabled {
+		var speakerDB diarization.SpeakerDatabase
+		var extractor diarization.EmbeddingExtractor
+		if speakerMgr != nil {
+			adapter := &speakerDatabaseAdapter{manager: speakerMgr}
+			speakerDB = adapter
+			extractor = adapter
+		}
+		diarizationMgr, err = diarization.NewManagerWithBackend(&config.Diarization, speakerDB, extractor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create diarization manager: %w", err)
+		}
 	}
 
 	// Initialize ASR service if enabled
 	var asrService ASRService
+	var transcriber types.Transcriber
 	if config.ASR.Enabled {
-		// ASR service will be initialized separately and set via SetASRService
-		// This avoids circular imports
-		asrService = nil // Will be set later
+		switch config.ASR.Backend {
+		case voiceasr.BackendSherpaOnline:
+			service, err := voiceasr.NewService(&config.ASR)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create ASR service: %w", err)
+			}
+			asrService = service
+		case voiceasr.BackendSherpaOffline:
+			model, err := voiceasr.NewSherpaOfflineModel(&config.ASR)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create ASR transcriber: %w", err)
+			}
+			transcriber = model
+		default:
+			return nil, fmt.Errorf("unsupported ASR backend %q", config.ASR.Backend)
+		}
+	}
+
+	var synthesizer types.SpeechSynthesizer
+	if config.TTS.Enabled {
+		synth, err := voicetts.NewSherpaOfflineSynthesizer(&config.TTS)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create TTS synthesizer: %w", err)
+		}
+		synthesizer = synth
 	}
 
 	return &VoiceKit{
 		config:         config,
 		speakerManager: speakerMgr,
 		audioConverter: audioConverter,
+		audioResampler: audioResampler,
 		diarizationMgr: diarizationMgr,
 		asrService:     asrService,
+		transcriber:    transcriber,
+		synthesizer:    synthesizer,
 		metrics:        NewMetricsCollector(),
 	}, nil
 }
 
-// ASRService defines the interface for ASR services
-type ASRService interface {
-	ProcessAudioChunk(ctx context.Context, sessionID string, audio []float32) (*types.Transcription, error)
-	RegisterModel(model ASRModel) error
-	GetModel(name string) (ASRModel, bool)
-	SelectModel(language string, requirements *types.ModelRequirements) (ASRModel, error)
-	Close() error
-}
+// ASRService defines the interface for ASR services.
+type ASRService = types.ASRService
 
-// ASRModel represents an ASR model interface
-type ASRModel interface {
-	Name() string
-	Language() string
-	Quantization() string
-	ProcessAudio(ctx context.Context, audio []float32, state *types.StreamingState) (*types.Transcription, error)
-	SupportsLanguage(lang string) bool
-	Latency() time.Duration
-	Close() error
-}
+// ASRModel represents an ASR model interface.
+type ASRModel = types.ASRModel
+
+// Transcriber represents a batch/offline ASR transcriber.
+type Transcriber = types.Transcriber
+
+// SpeechSynthesizer represents a text-to-speech synthesizer.
+type SpeechSynthesizer = types.SpeechSynthesizer
+
+// SynthesisRequest represents one text-to-speech generation request.
+type SynthesisRequest = types.SynthesisRequest
+
+// SynthesizedSpeech contains generated normalized PCM samples.
+type SynthesizedSpeech = types.SynthesizedSpeech
 
 // Close releases all resources held by VoiceKit
-func (vk *VoiceKit) Close() {
+func (vk *VoiceKit) Close() error {
+	var errs []error
 	if vk.speakerManager != nil {
 		vk.speakerManager.Close()
 	}
 	if vk.asrService != nil {
-		vk.asrService.Close()
+		if err := vk.asrService.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("ASR service close failed: %w", err))
+		}
 	}
+	if vk.transcriber != nil {
+		if err := vk.transcriber.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("ASR transcriber close failed: %w", err))
+		}
+	}
+	if vk.synthesizer != nil {
+		if err := vk.synthesizer.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("TTS synthesizer close failed: %w", err))
+		}
+	}
+	if vk.diarizationMgr != nil {
+		if err := vk.diarizationMgr.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("diarization close failed: %w", err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("voicekit close failed: %v", errs)
+	}
+	return nil
 }
 
 // Speaker returns the speaker recognition manager
@@ -161,6 +210,16 @@ func (vk *VoiceKit) Metrics() *MetricsCollector {
 // ASR returns the ASR service
 func (vk *VoiceKit) ASR() ASRService {
 	return vk.asrService
+}
+
+// Transcriber returns the batch/offline ASR transcriber.
+func (vk *VoiceKit) Transcriber() types.Transcriber {
+	return vk.transcriber
+}
+
+// Synthesizer returns the text-to-speech synthesizer.
+func (vk *VoiceKit) Synthesizer() types.SpeechSynthesizer {
+	return vk.synthesizer
 }
 
 // SetASRService sets the ASR service (used to avoid circular imports)
@@ -192,11 +251,19 @@ func (vk *VoiceKit) ProcessAudio(audioData []byte, inputConfig *audio.AudioConfi
 		return nil, nil, err
 	}
 
+	processingAudio, processingSampleRate, err := vk.prepareProcessingAudio(float32Data, inputConfig.SampleRate)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(processingAudio) == 0 {
+		return nil, nil, fmt.Errorf("audio conversion produced empty sample data")
+	}
+
 	// Speaker identification
 	var speakerResult *speaker.IdentifyResult
 	if vk.speakerManager != nil {
 		speakerStartTime := time.Now()
-		speakerResult, err = vk.speakerManager.IdentifySpeaker(float32Data, inputConfig.SampleRate)
+		speakerResult, err = vk.speakerManager.IdentifySpeaker(processingAudio, processingSampleRate)
 		speakerProcessTime := time.Since(speakerStartTime)
 		vk.metrics.RecordSpeakerIdentify(speakerProcessTime, err == nil)
 
@@ -205,17 +272,34 @@ func (vk *VoiceKit) ProcessAudio(audioData []byte, inputConfig *audio.AudioConfi
 		}
 	}
 
-	// Diarization
-	diarizationStartTime := time.Now()
-	diarizationResult, err := vk.diarizationMgr.ProcessAudio(float32Data, inputConfig.SampleRate, sessionID)
-	diarizationProcessTime := time.Since(diarizationStartTime)
-	vk.metrics.RecordDiarization(diarizationProcessTime, err == nil)
+	var diarizationResult *diarization.DiarizationResult
+	if vk.diarizationMgr != nil {
+		diarizationStartTime := time.Now()
+		diarizationResult, err = vk.diarizationMgr.ProcessAudio(processingAudio, processingSampleRate, sessionID)
+		diarizationProcessTime := time.Since(diarizationStartTime)
+		vk.metrics.RecordDiarization(diarizationProcessTime, err == nil)
 
-	if err != nil {
-		return nil, nil, err
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return speakerResult, diarizationResult, nil
+}
+
+func (vk *VoiceKit) prepareProcessingAudio(samples []float32, sourceRate int) ([]float32, int, error) {
+	targetRate := vk.config.Audio.SampleRate
+	if sourceRate == targetRate {
+		return samples, sourceRate, nil
+	}
+	if vk.audioResampler == nil {
+		return nil, 0, fmt.Errorf("audio resampler is not initialized")
+	}
+	resampled, err := vk.audioResampler.Resample(samples, sourceRate, targetRate)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to normalize audio sample rate from %d Hz to %d Hz: %w", sourceRate, targetRate, err)
+	}
+	return resampled, targetRate, nil
 }
 
 // NewSpeakerManager creates a standalone speaker recognition manager
@@ -229,7 +313,7 @@ func NewAudioConverter(config *audio.ConverterConfig) (*audio.Converter, error) 
 }
 
 // NewDiarizationManager creates a standalone diarization manager
-func NewDiarizationManager(config *diarization.DiarizationConfig, speakerDB diarization.SpeakerDatabase) *diarization.Manager {
+func NewDiarizationManager(config *diarization.DiarizationConfig, speakerDB diarization.SpeakerDatabase) (*diarization.Manager, error) {
 	return diarization.NewManager(config, speakerDB)
 }
 
@@ -274,25 +358,6 @@ func (a *speakerDatabaseAdapter) RegisterSpeakerEmbedding(speakerID string, embe
 	return a.manager.RegisterSpeakerEmbedding(speakerID, embedding)
 }
 
-// mockSpeakerDatabase provides a mock implementation for diarization when no speaker manager is available
-type mockSpeakerDatabase struct{}
-
-func (m *mockSpeakerDatabase) GetSpeakerEmbedding(speakerID string) ([]float32, error) {
-	return nil, ErrSpeakerNotFound
-}
-
-func (m *mockSpeakerDatabase) GetAllSpeakers() map[string][]float32 {
-	return make(map[string][]float32)
-}
-
-func (m *mockSpeakerDatabase) CalculateSimilarity(embedding1, embedding2 []float32) float32 {
-	// Simple mock similarity calculation
-	if len(embedding1) == 0 || len(embedding2) == 0 {
-		return 0.0
-	}
-	return 0.5 // Mock similarity
-}
-
-func (m *mockSpeakerDatabase) RegisterSpeakerEmbedding(speakerID string, embedding []float32) error {
-	return nil
+func (a *speakerDatabaseAdapter) ExtractEmbedding(ctx context.Context, audioData []float32, sampleRate int) ([]float32, error) {
+	return a.manager.ExtractEmbedding(ctx, audioData, sampleRate)
 }

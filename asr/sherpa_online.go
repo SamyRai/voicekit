@@ -1,0 +1,459 @@
+package asr
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/SamyRai/voicekit/types"
+	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+)
+
+// SherpaOnlineModel implements streaming ASR with Sherpa ONNX OnlineRecognizer.
+type SherpaOnlineModel struct {
+	name         string
+	language     string
+	quantization string
+	sampleRate   int
+	recognizer   onlineRecognizer
+	sessions     map[*onlineSession]struct{}
+
+	mu     sync.Mutex
+	closed bool
+}
+
+type onlineRecognizer interface {
+	NewStream() (onlineStream, error)
+	Decode(stream onlineStream) error
+	IsReady(stream onlineStream) bool
+	IsEndpoint(stream onlineStream) bool
+	Reset(stream onlineStream) error
+	Result(stream onlineStream) (*sherpa.OnlineRecognizerResult, error)
+	Close() error
+}
+
+type onlineStream interface {
+	AcceptWaveform(sampleRate int, samples []float32) error
+	InputFinished() error
+	Close() error
+}
+
+type sherpaOnlineRecognizer struct {
+	recognizer *sherpa.OnlineRecognizer
+}
+
+type sherpaOnlineStream struct {
+	stream *sherpa.OnlineStream
+}
+
+type onlineSession struct {
+	stream onlineStream
+	closed bool
+}
+
+func NewSherpaOnlineModel(config *Config) (*SherpaOnlineModel, error) {
+	if config == nil {
+		return nil, fmt.Errorf("config cannot be nil")
+	}
+	config.ApplyDefaults()
+	if config.Backend != BackendSherpaOnline {
+		return nil, fmt.Errorf("Sherpa online recognizer requires backend %q, got %q", BackendSherpaOnline, config.Backend)
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+
+	recognizerConfig, err := buildOnlineRecognizerConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	recognizer := sherpa.NewOnlineRecognizer(recognizerConfig)
+	if recognizer == nil {
+		return nil, fmt.Errorf("failed to create Sherpa online recognizer")
+	}
+
+	return &SherpaOnlineModel{
+		name:         config.DefaultModel,
+		language:     config.Language,
+		quantization: config.Quantization,
+		sampleRate:   config.SampleRate,
+		recognizer:   &sherpaOnlineRecognizer{recognizer: recognizer},
+		sessions:     make(map[*onlineSession]struct{}),
+	}, nil
+}
+
+func buildOnlineRecognizerConfig(config *Config) (*sherpa.OnlineRecognizerConfig, error) {
+	online := config.Online
+	modelConfig := sherpa.OnlineModelConfig{
+		Tokens:        online.TokensPath,
+		NumThreads:    config.NumThreads,
+		Provider:      config.Provider,
+		Debug:         boolToInt(config.Debug),
+		ModelType:     online.ModelType,
+		TokensBufSize: 0,
+	}
+
+	if online.EncoderPath != "" || online.DecoderPath != "" || online.JoinerPath != "" {
+		if online.EncoderPath == "" || online.DecoderPath == "" || online.JoinerPath == "" {
+			return nil, fmt.Errorf("transducer encoder, decoder, and joiner paths must be provided together")
+		}
+		modelConfig.Transducer = sherpa.OnlineTransducerModelConfig{
+			Encoder: online.EncoderPath,
+			Decoder: online.DecoderPath,
+			Joiner:  online.JoinerPath,
+		}
+	} else {
+		switch strings.ToLower(online.ModelType) {
+		case "", "zipformer2_ctc", "zipformer_ctc", "ctc":
+			modelConfig.Zipformer2Ctc.Model = online.ModelPath
+		case "nemo_ctc", "nemo":
+			modelConfig.NemoCtc.Model = online.ModelPath
+		case "tone_ctc", "tone":
+			modelConfig.ToneCtc.Model = online.ModelPath
+		default:
+			return nil, fmt.Errorf("unsupported single-file online Sherpa model type %q", online.ModelType)
+		}
+	}
+
+	return &sherpa.OnlineRecognizerConfig{
+		FeatConfig: sherpa.FeatureConfig{
+			SampleRate: config.SampleRate,
+			FeatureDim: config.FeatureDim,
+		},
+		ModelConfig:    modelConfig,
+		DecodingMethod: config.DecodingMethod,
+		MaxActivePaths: config.MaxActivePaths,
+	}, nil
+}
+
+func (m *SherpaOnlineModel) Name() string {
+	return m.name
+}
+
+func (m *SherpaOnlineModel) Language() string {
+	return m.language
+}
+
+func (m *SherpaOnlineModel) Quantization() string {
+	return m.quantization
+}
+
+func (m *SherpaOnlineModel) ProcessAudio(ctx context.Context, audio []float32, state *types.StreamingState) (*types.Transcription, error) {
+	return m.processAudio(ctx, audio, state, false)
+}
+
+func (m *SherpaOnlineModel) FinishAudio(ctx context.Context, audio []float32, state *types.StreamingState) (*types.Transcription, error) {
+	return m.processAudio(ctx, audio, state, true)
+}
+
+func (m *SherpaOnlineModel) processAudio(ctx context.Context, audio []float32, state *types.StreamingState, finish bool) (*types.Transcription, error) {
+	state, closeAfter, err := m.prepareProcessState(ctx, audio, state)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.processAudioLocked(ctx, audio, state, finish, closeAfter)
+}
+
+func (m *SherpaOnlineModel) prepareProcessState(ctx context.Context, audio []float32, state *types.StreamingState) (*types.StreamingState, bool, error) {
+	if ctx == nil {
+		return nil, false, fmt.Errorf("context cannot be nil")
+	}
+	if len(audio) == 0 {
+		return nil, false, fmt.Errorf("audio cannot be empty")
+	}
+	localState := state == nil
+	if localState {
+		state = &types.StreamingState{Language: m.language}
+	}
+	return state, localState, nil
+}
+
+func (m *SherpaOnlineModel) processAudioLocked(ctx context.Context, audio []float32, state *types.StreamingState, finish bool, closeAfter bool) (*types.Transcription, error) {
+	if m.closed || m.recognizer == nil {
+		return nil, fmt.Errorf("Sherpa online recognizer is closed")
+	}
+
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+
+	session, err := m.sessionForStateLocked(state)
+	if err != nil {
+		return nil, err
+	}
+	if finish || closeAfter {
+		defer func() {
+			_ = m.closeSessionLocked(session)
+			if state.ASRState == session {
+				state.ASRState = nil
+			}
+		}()
+	}
+
+	if err := session.stream.AcceptWaveform(m.sampleRate, audio); err != nil {
+		return nil, err
+	}
+	if finish {
+		if err := session.stream.InputFinished(); err != nil {
+			return nil, err
+		}
+	}
+
+	result, isEndpoint, err := m.decodeSessionLocked(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+
+	if isEndpoint && !finish {
+		if err := m.recognizer.Reset(session.stream); err != nil {
+			return nil, err
+		}
+	}
+
+	return m.transcriptionFromOnlineResult(result, audio, finish, isEndpoint), nil
+}
+
+func (m *SherpaOnlineModel) decodeSessionLocked(ctx context.Context, session *onlineSession) (*sherpa.OnlineRecognizerResult, bool, error) {
+	for m.recognizer.IsReady(session.stream) {
+		if err := contextError(ctx); err != nil {
+			return nil, false, err
+		}
+		if err := m.recognizer.Decode(session.stream); err != nil {
+			return nil, false, err
+		}
+	}
+
+	result, err := m.recognizer.Result(session.stream)
+	if err != nil {
+		return nil, false, err
+	}
+	if result == nil {
+		return nil, false, fmt.Errorf("Sherpa online recognizer returned nil result")
+	}
+	return result, m.recognizer.IsEndpoint(session.stream), nil
+}
+
+func (m *SherpaOnlineModel) transcriptionFromOnlineResult(result *sherpa.OnlineRecognizerResult, audio []float32, finish bool, isEndpoint bool) *types.Transcription {
+	return &types.Transcription{
+		Text:       result.Text,
+		IsPartial:  !finish && !isEndpoint,
+		Confidence: 0,
+		Language:   m.language,
+		Timestamp:  time.Now(),
+		StartTime:  0,
+		EndTime:    time.Duration(len(audio)) * time.Second / time.Duration(m.sampleRate),
+		Words:      wordsFromOnlineResult(result),
+	}
+}
+
+func (m *SherpaOnlineModel) sessionForStateLocked(state *types.StreamingState) (*onlineSession, error) {
+	if session, ok := state.ASRState.(*onlineSession); ok && !session.closed {
+		return session, nil
+	}
+
+	if closer, ok := state.ASRState.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
+
+	stream, err := m.recognizer.NewStream()
+	if err != nil {
+		return nil, err
+	}
+	session := &onlineSession{stream: stream}
+	if m.sessions == nil {
+		m.sessions = make(map[*onlineSession]struct{})
+	}
+	m.sessions[session] = struct{}{}
+	state.ASRState = session
+	return session, nil
+}
+
+func (m *SherpaOnlineModel) closeSessionLocked(session *onlineSession) error {
+	if session == nil {
+		return nil
+	}
+	err := session.Close()
+	delete(m.sessions, session)
+	return err
+}
+
+func (m *SherpaOnlineModel) SupportsLanguage(lang string) bool {
+	if lang == "" || m.language == "" || m.language == "auto" || m.language == "multi" || m.language == "all" {
+		return true
+	}
+	return strings.EqualFold(m.language, lang)
+}
+
+func (m *SherpaOnlineModel) Latency() time.Duration {
+	return 200 * time.Millisecond
+}
+
+func (m *SherpaOnlineModel) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil
+	}
+	for session := range m.sessions {
+		if err := session.Close(); err != nil {
+			return err
+		}
+		delete(m.sessions, session)
+	}
+	if m.recognizer != nil {
+		if err := m.recognizer.Close(); err != nil {
+			return err
+		}
+		m.recognizer = nil
+	}
+	m.closed = true
+	return nil
+}
+
+func (r *sherpaOnlineRecognizer) NewStream() (onlineStream, error) {
+	stream := sherpa.NewOnlineStream(r.recognizer)
+	if stream == nil {
+		return nil, fmt.Errorf("failed to create Sherpa online stream")
+	}
+	return &sherpaOnlineStream{stream: stream}, nil
+}
+
+func (r *sherpaOnlineRecognizer) Decode(stream onlineStream) error {
+	sherpaStream, err := nativeOnlineStream(stream)
+	if err != nil {
+		return err
+	}
+	r.recognizer.Decode(sherpaStream)
+	return nil
+}
+
+func (r *sherpaOnlineRecognizer) IsReady(stream onlineStream) bool {
+	sherpaStream, err := nativeOnlineStream(stream)
+	if err != nil {
+		return false
+	}
+	return r.recognizer.IsReady(sherpaStream)
+}
+
+func (r *sherpaOnlineRecognizer) IsEndpoint(stream onlineStream) bool {
+	sherpaStream, err := nativeOnlineStream(stream)
+	if err != nil {
+		return false
+	}
+	return r.recognizer.IsEndpoint(sherpaStream)
+}
+
+func (r *sherpaOnlineRecognizer) Reset(stream onlineStream) error {
+	sherpaStream, err := nativeOnlineStream(stream)
+	if err != nil {
+		return err
+	}
+	r.recognizer.Reset(sherpaStream)
+	return nil
+}
+
+func (r *sherpaOnlineRecognizer) Result(stream onlineStream) (*sherpa.OnlineRecognizerResult, error) {
+	sherpaStream, err := nativeOnlineStream(stream)
+	if err != nil {
+		return nil, err
+	}
+	return r.recognizer.GetResult(sherpaStream), nil
+}
+
+func (r *sherpaOnlineRecognizer) Close() error {
+	if r.recognizer != nil {
+		sherpa.DeleteOnlineRecognizer(r.recognizer)
+		r.recognizer = nil
+	}
+	return nil
+}
+
+func (s *sherpaOnlineStream) AcceptWaveform(sampleRate int, samples []float32) error {
+	if s.stream == nil {
+		return fmt.Errorf("Sherpa online stream is closed")
+	}
+	s.stream.AcceptWaveform(sampleRate, samples)
+	return nil
+}
+
+func (s *sherpaOnlineStream) InputFinished() error {
+	if s.stream == nil {
+		return fmt.Errorf("Sherpa online stream is closed")
+	}
+	s.stream.InputFinished()
+	return nil
+}
+
+func (s *sherpaOnlineStream) Close() error {
+	if s.stream != nil {
+		sherpa.DeleteOnlineStream(s.stream)
+		s.stream = nil
+	}
+	return nil
+}
+
+func (s *onlineSession) Close() error {
+	if s == nil || s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.stream != nil {
+		return s.stream.Close()
+	}
+	return nil
+}
+
+func nativeOnlineStream(stream onlineStream) (*sherpa.OnlineStream, error) {
+	sherpaStream, ok := stream.(*sherpaOnlineStream)
+	if !ok || sherpaStream.stream == nil {
+		return nil, fmt.Errorf("unexpected online stream implementation")
+	}
+	return sherpaStream.stream, nil
+}
+
+func wordsFromOnlineResult(result *sherpa.OnlineRecognizerResult) []types.Word {
+	if result == nil || len(result.Tokens) == 0 || len(result.Timestamps) == 0 {
+		return nil
+	}
+
+	n := len(result.Tokens)
+	if len(result.Timestamps) < n {
+		n = len(result.Timestamps)
+	}
+	words := make([]types.Word, 0, n)
+	for i := 0; i < n; i++ {
+		start := time.Duration(result.Timestamps[i] * float32(time.Second))
+		end := start
+		if i+1 < len(result.Timestamps) {
+			end = time.Duration(result.Timestamps[i+1] * float32(time.Second))
+		}
+		words = append(words, types.Word{
+			Text:       result.Tokens[i],
+			StartTime:  start,
+			EndTime:    end,
+			Confidence: 0,
+		})
+	}
+	return words
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func contextError(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}

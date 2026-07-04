@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/go-audio/wav"
 )
@@ -202,15 +203,131 @@ func (c *Converter) encodeAudio(samples []float32, config *AudioConfig) ([]byte,
 	}
 }
 
-// decodeWAV decodes WAV format (simplified implementation)
+// decodeWAV decodes WAV format using the RIFF/WAV parser instead of assuming a 44-byte header.
 func (c *Converter) decodeWAV(data []byte, config *AudioConfig) ([]float32, error) {
-	if len(data) < 44 {
-		return nil, fmt.Errorf("WAV data too short")
+	reader := bytes.NewReader(data)
+	decoder := wav.NewDecoder(reader)
+	if !decoder.IsValidFile() {
+		return nil, fmt.Errorf("invalid WAV file")
+	}
+	if decoder.WavAudioFormat != 1 {
+		return nil, fmt.Errorf("unsupported WAV audio format %d: only PCM is supported", decoder.WavAudioFormat)
+	}
+	if int(decoder.NumChans) != config.Channels {
+		return nil, fmt.Errorf("WAV channel count %d does not match config channels %d", decoder.NumChans, config.Channels)
+	}
+	if int(decoder.SampleRate) != config.SampleRate {
+		return nil, fmt.Errorf("WAV sample rate %d does not match config sample rate %d", decoder.SampleRate, config.SampleRate)
+	}
+	if int(decoder.BitDepth) != config.BitsPerSample {
+		return nil, fmt.Errorf("WAV bit depth %d does not match config bits per sample %d", decoder.BitDepth, config.BitsPerSample)
 	}
 
-	// Skip WAV header (44 bytes) and decode PCM data
-	pcmData := data[44:]
-	return c.decodePCM(pcmData, config)
+	return c.decodeWAVPCM(decoder, config)
+}
+
+func (c *Converter) decodeWAVPCM(decoder *wav.Decoder, config *AudioConfig) ([]float32, error) {
+	if err := decoder.FwdToPCM(); err != nil {
+		return nil, fmt.Errorf("failed to locate WAV PCM data: %w", err)
+	}
+	if decoder.PCMChunk == nil {
+		return nil, fmt.Errorf("WAV PCM chunk not found")
+	}
+
+	bytesPerSample := config.GetBytesPerSample()
+	if decoder.PCMSize%bytesPerSample != 0 {
+		return nil, fmt.Errorf("WAV PCM data size not aligned with sample size")
+	}
+
+	sampleCount := decoder.PCMSize / bytesPerSample
+	samples := DefaultAudioBufferPool.Get(sampleCount)
+	if sampleCount == 0 {
+		return samples, nil
+	}
+
+	chunkSamples := c.config.TempBufferSize
+	if chunkSamples > sampleCount {
+		chunkSamples = sampleCount
+	}
+	chunkBytes := chunkSamples * bytesPerSample
+	buffer := BytePool.Get(chunkBytes)
+	defer BytePool.Put(buffer)
+
+	written := 0
+	for written < sampleCount {
+		remainingSamples := sampleCount - written
+		samplesThisChunk := chunkSamples
+		if remainingSamples < samplesThisChunk {
+			samplesThisChunk = remainingSamples
+		}
+		bytesThisChunk := samplesThisChunk * bytesPerSample
+
+		if _, err := io.ReadFull(decoder.PCMChunk.R, buffer[:bytesThisChunk]); err != nil {
+			DefaultAudioBufferPool.Put(samples)
+			return nil, fmt.Errorf("failed to decode WAV PCM data: %w", err)
+		}
+		if err := c.decodePCMBytesInto(samples[written:written+samplesThisChunk], buffer[:bytesThisChunk], config); err != nil {
+			DefaultAudioBufferPool.Put(samples)
+			return nil, err
+		}
+		written += samplesThisChunk
+	}
+
+	return samples, nil
+}
+
+func (c *Converter) decodePCMBytesInto(samples []float32, data []byte, config *AudioConfig) error {
+	bytesPerSample := config.GetBytesPerSample()
+	if len(data) != len(samples)*bytesPerSample {
+		return fmt.Errorf("PCM data size not aligned with sample size")
+	}
+
+	switch config.BitsPerSample {
+	case 8:
+		for i, val := range data {
+			samples[i] = float32(int(val)-128) / 128.0
+		}
+	case 16:
+		for i := range samples {
+			offset := i * 2
+			val := int16(binary.LittleEndian.Uint16(data[offset : offset+2]))
+			samples[i] = float32(val) / c.config.NormalizeFactor
+		}
+	case 24:
+		for i := range samples {
+			offset := i * 3
+			val := int32(data[offset]) | int32(data[offset+1])<<8 | int32(data[offset+2])<<16
+			if val&0x800000 != 0 {
+				val |= ^int32(0xFFFFFF)
+			}
+			samples[i] = float32(val) / 8388608.0
+		}
+	case 32:
+		for i := range samples {
+			offset := i * 4
+			val := int32(binary.LittleEndian.Uint32(data[offset : offset+4]))
+			samples[i] = float32(val) / 2147483648.0
+		}
+	default:
+		return fmt.Errorf("unsupported bits per sample: %d", config.BitsPerSample)
+	}
+
+	return nil
+}
+
+func (c *Converter) decodePCM(data []byte, config *AudioConfig) ([]float32, error) {
+	bytesPerSample := config.GetBytesPerSample()
+	if len(data)%bytesPerSample != 0 {
+		return nil, fmt.Errorf("PCM data size not aligned with sample size")
+	}
+
+	sampleCount := len(data) / bytesPerSample
+	samples := DefaultAudioBufferPool.Get(sampleCount)
+	if err := c.decodePCMBytesInto(samples, data, config); err != nil {
+		DefaultAudioBufferPool.Put(samples)
+		return nil, err
+	}
+	return samples, nil
 }
 
 // encodeWAV encodes to WAV format (simplified implementation)
@@ -251,110 +368,66 @@ func (c *Converter) createWAVHeader(dataSize int, config *AudioConfig) []byte {
 	return header
 }
 
-// decodePCM decodes raw PCM data
-func (c *Converter) decodePCM(data []byte, config *AudioConfig) ([]float32, error) {
-	bytesPerSample := config.GetBytesPerSample()
-	if len(data)%bytesPerSample != 0 {
-		return nil, fmt.Errorf("PCM data size not aligned with sample size")
-	}
-
-	sampleCount := len(data) / bytesPerSample
-	samples := DefaultAudioBufferPool.Get(sampleCount)
-
-	buf := bytes.NewReader(data)
-
-	for i := 0; i < sampleCount; i++ {
-		switch config.BitsPerSample {
-		case 8:
-			var val uint8
-			if err := binary.Read(buf, binary.LittleEndian, &val); err != nil {
-				DefaultAudioBufferPool.Put(samples)
-				return nil, err
-			}
-			samples[i] = float32(val-128) / 127.0 // Convert to -1..1 range
-
-		case 16:
-			var val int16
-			if err := binary.Read(buf, binary.LittleEndian, &val); err != nil {
-				DefaultAudioBufferPool.Put(samples)
-				return nil, err
-			}
-			samples[i] = float32(val) / c.config.NormalizeFactor
-
-		case 24:
-			// Read 3 bytes as 24-bit signed integer
-			var val int32
-			temp := BytePool.Get(4)
-			if _, err := io.ReadFull(buf, temp[:3]); err != nil {
-				BytePool.Put(temp)
-				DefaultAudioBufferPool.Put(samples)
-				return nil, err
-			}
-			if temp[2]&0x80 != 0 { // Sign extension
-				temp[3] = 0xFF
-			}
-			val = int32(binary.LittleEndian.Uint32(temp))
-			BytePool.Put(temp)
-			samples[i] = float32(val>>8) / 8388608.0
-
-		case 32:
-			var val int32
-			if err := binary.Read(buf, binary.LittleEndian, &val); err != nil {
-				DefaultAudioBufferPool.Put(samples)
-				return nil, err
-			}
-			samples[i] = float32(val) / 2147483648.0
-
-		default:
-			DefaultAudioBufferPool.Put(samples)
-			return nil, fmt.Errorf("unsupported bits per sample: %d", config.BitsPerSample)
-		}
-	}
-
-	return samples, nil
-}
-
 // encodePCM encodes to raw PCM data
 func (c *Converter) encodePCM(samples []float32, config *AudioConfig) ([]byte, error) {
-	// Estimate output size and get buffer from pool
 	bytesPerSample := config.GetBytesPerSample()
 	outputSize := len(samples) * bytesPerSample
-	output := BytePool.Get(outputSize)
-	buf := bytes.NewBuffer(output[:0]) // Use pooled buffer as backing
+	output := make([]byte, outputSize)
 
-	for _, sample := range samples {
+	for i, sample := range samples {
+		sample = clampSample(sample)
 		switch config.BitsPerSample {
 		case 8:
-			val := uint8((sample * 127.0) + 128.0) // Convert from -1..1 to 0..255
-			binary.Write(buf, binary.LittleEndian, val)
-
+			output[i] = uint8(math.Round(float64((sample + 1.0) * 127.5)))
 		case 16:
-			val := int16(sample * c.config.NormalizeFactor) // Convert to -32768..32767 range
-			binary.Write(buf, binary.LittleEndian, val)
-
+			offset := i * bytesPerSample
+			binary.LittleEndian.PutUint16(output[offset:offset+2], uint16(floatToInt16(sample)))
 		case 24:
-			val := int32(sample * 8388607.0) // Convert to 24-bit range
-			temp := BytePool.Get(3)
-			binary.LittleEndian.PutUint32(temp, uint32(val<<8))
-			buf.Write(temp[:3])
-			BytePool.Put(temp)
-
+			offset := i * bytesPerSample
+			val := floatToInt24(sample)
+			output[offset] = byte(val)
+			output[offset+1] = byte(val >> 8)
+			output[offset+2] = byte(val >> 16)
 		case 32:
-			val := int32(sample * 2147483647.0) // Convert to 32-bit range
-			binary.Write(buf, binary.LittleEndian, val)
-
+			offset := i * bytesPerSample
+			binary.LittleEndian.PutUint32(output[offset:offset+4], uint32(floatToInt32(sample)))
 		default:
-			BytePool.Put(output)
 			return nil, fmt.Errorf("unsupported bits per sample: %d", config.BitsPerSample)
 		}
 	}
 
-	// Return the actual bytes written
-	result := make([]byte, buf.Len())
-	copy(result, buf.Bytes())
-	BytePool.Put(output)
+	return output, nil
+}
 
-	return result, nil
+func clampSample(sample float32) float32 {
+	if sample > 1 {
+		return 1
+	}
+	if sample < -1 {
+		return -1
+	}
+	return sample
+}
+
+func floatToInt16(sample float32) int16 {
+	if sample <= -1 {
+		return -32768
+	}
+	return int16(math.Round(float64(sample * 32767)))
+}
+
+func floatToInt24(sample float32) int32 {
+	if sample <= -1 {
+		return -8388608
+	}
+	return int32(math.Round(float64(sample * 8388607)))
+}
+
+func floatToInt32(sample float32) int32 {
+	if sample <= -1 {
+		return -2147483648
+	}
+	return int32(math.Round(float64(sample * 2147483647)))
 }
 
 // Compressed audio format support is not implemented
@@ -473,7 +546,6 @@ func (c *Converter) ValidateConversion(from, to AudioFormat) bool {
 
 // ParseWAVFile parses WAV file and returns audio data
 func (c *Converter) ParseWAVFile(data []byte) ([]float32, int, error) {
-	// Read WAV file
 	reader := bytes.NewReader(data)
 	decoder := wav.NewDecoder(reader)
 	if !decoder.IsValidFile() {
@@ -488,18 +560,18 @@ func (c *Converter) ParseWAVFile(data []byte) ([]float32, int, error) {
 	if numChannels > 2 {
 		return nil, 0, fmt.Errorf("unsupported number of channels: %d", numChannels)
 	}
-
-	// Read audio data
-	buffer, err := decoder.FullPCMBuffer()
+	if decoder.WavAudioFormat != 1 {
+		return nil, 0, fmt.Errorf("unsupported WAV audio format %d: only PCM is supported", decoder.WavAudioFormat)
+	}
+	config := &AudioConfig{
+		Format:        FormatWAV,
+		SampleRate:    sampleRate,
+		Channels:      numChannels,
+		BitsPerSample: int(decoder.BitDepth),
+	}
+	samples, err := c.decodeWAVPCM(decoder, config)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to decode audio: %v", err)
-	}
-
-	// Convert to float32 format
-	samples := DefaultAudioBufferPool.Get(len(buffer.Data))
-	for i, sample := range buffer.Data {
-		// Convert int to float32, range [-1.0, 1.0]
-		samples[i] = float32(sample) / c.config.NormalizeFactor
 	}
 
 	// If stereo, convert to mono (take average)

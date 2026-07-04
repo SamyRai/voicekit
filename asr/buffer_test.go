@@ -1,16 +1,16 @@
 package asr
 
 import (
-	"testing"
 	"github.com/SamyRai/voicekit/types"
+	"testing"
 )
 
 func TestAudioBuffer_Append(t *testing.T) {
 	config := &types.StreamingConfig{
-		ChunkSize:  16000,
+		ChunkSize:   16000,
 		OverlapSize: 1600,
-		BufferSize: 48000,
-		SampleRate: 16000,
+		BufferSize:  48000,
+		SampleRate:  16000,
 	}
 
 	buffer := NewAudioBuffer(config)
@@ -18,7 +18,7 @@ func TestAudioBuffer_Append(t *testing.T) {
 	// Test appending audio
 	audio := make([]float32, 16000)
 	for i := range audio {
-		audio[i] = float32(i % 100) / 100.0
+		audio[i] = float32(i%100) / 100.0
 	}
 
 	err := buffer.Append(audio)
@@ -44,10 +44,10 @@ func TestAudioBuffer_Append(t *testing.T) {
 
 func TestAudioBuffer_Overflow(t *testing.T) {
 	config := &types.StreamingConfig{
-		ChunkSize:  16000,
+		ChunkSize:   16000,
 		OverlapSize: 1600,
-		BufferSize: 32000, // Small buffer to test overflow
-		SampleRate: 16000,
+		BufferSize:  32000, // Small buffer to test overflow
+		SampleRate:  16000,
 	}
 
 	buffer := NewAudioBuffer(config)

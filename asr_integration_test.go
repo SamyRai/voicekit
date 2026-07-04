@@ -2,55 +2,95 @@ package voicekit
 
 import (
 	"testing"
+
+	"github.com/SamyRai/voicekit/audio"
 )
 
-func TestVoiceKit_Integration(t *testing.T) {
-	// Create VoiceKit config with ASR enabled
-	config := &Config{
-		Audio: AudioConfig{
-			SampleRate:      16000,
-			Channels:        1,
-			NormalizeFactor: 32768.0,
-		},
-		Speaker: SpeakerConfig{
-			NumThreads: 1,
-			Provider:   "cpu",
-			Threshold:  0.5,
-			DataDir:    "/tmp/voicekit_test_speaker",
-		},
-		Diarization: DiarizationConfig{
-			Enabled:               true,
-			MinSegmentLength:      1.0,
-			MaxSegmentLength:      30.0,
-			SilenceThreshold:      0.5,
-			SimilarityThreshold:   0.7,
-			MaxSpeakers:           10,
-			ReassignmentThreshold: 0.8,
-			OverlapThreshold:      0.2,
-		},
-		ASR: ASRConfig{
-			Enabled:              true,
-			DefaultModel:         "whisper_large_v3",
-			Language:             "en",
-			Quantization:         "int8",
-			MaxConcurrentStreams: 10,
-			StreamTimeout:        300,
-			ChunkSize:            16000,
-			VADProvider:          "ten_vad",
-		},
-	}
-
-	// Create VoiceKit instance
-	vk, err := NewVoiceKit(config)
+func TestVoiceKitNilConfigIsAudioOnly(t *testing.T) {
+	vk, err := NewVoiceKit(nil)
 	if err != nil {
-		t.Fatalf("Failed to create VoiceKit: %v", err)
+		t.Fatalf("NewVoiceKit(nil) failed: %v", err)
 	}
 	defer vk.Close()
 
-	// Verify VoiceKit was created successfully
-	// Note: Individual services may not be available if their models/configs are not set up
-	// This test primarily verifies that the configuration validation and initialization pipeline works
+	if vk.Audio() == nil {
+		t.Fatal("expected audio converter")
+	}
+	if vk.Speaker() != nil {
+		t.Fatal("speaker manager should be disabled without a model path")
+	}
+	if vk.Diarization() != nil {
+		t.Fatal("diarization should be disabled by default")
+	}
+	if vk.ASR() != nil {
+		t.Fatal("ASR should be disabled by default")
+	}
+	if vk.Transcriber() != nil {
+		t.Fatal("transcriber should be disabled by default")
+	}
+	if vk.Synthesizer() != nil {
+		t.Fatal("TTS synthesizer should be disabled by default")
+	}
+}
 
-	// Test completed successfully - VoiceKit initialized with all components
-	t.Log("VoiceKit integration test passed")
+func TestVoiceKitASREnabledRequiresModelPaths(t *testing.T) {
+	config := DefaultConfig()
+	config.ASR.Enabled = true
+
+	if _, err := NewVoiceKit(config); err == nil {
+		t.Fatal("enabled ASR without Sherpa model paths should fail")
+	}
+}
+
+func TestVoiceKitTTSEnabledRequiresModelPaths(t *testing.T) {
+	config := DefaultConfig()
+	config.TTS.Enabled = true
+
+	if _, err := NewVoiceKit(config); err == nil {
+		t.Fatal("enabled TTS without Sherpa model paths should fail")
+	}
+}
+
+func TestConfigPartialDefaultsPreserveDisabledComponents(t *testing.T) {
+	config := &Config{}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("empty partial config should default to audio-only: %v", err)
+	}
+
+	if config.Audio.SampleRate != 16000 {
+		t.Fatalf("expected default sample rate, got %d", config.Audio.SampleRate)
+	}
+	if config.ASR.Enabled {
+		t.Fatal("ASR enabled boolean should not be defaulted to true")
+	}
+	if config.Diarization.Enabled {
+		t.Fatal("diarization enabled boolean should not be defaulted to true")
+	}
+	if config.TTS.Enabled {
+		t.Fatal("TTS enabled boolean should not be defaulted to true")
+	}
+}
+
+func TestVoiceKitPrepareProcessingAudioResamplesToConfiguredRate(t *testing.T) {
+	config := DefaultConfig()
+	config.Audio.SampleRate = 16000
+	vk := &VoiceKit{
+		config:         config,
+		audioResampler: audio.NewResampler(nil),
+	}
+
+	input := make([]float32, 8000)
+	for i := range input {
+		input[i] = 0.5
+	}
+	output, rate, err := vk.prepareProcessingAudio(input, 8000)
+	if err != nil {
+		t.Fatalf("sample-rate normalization failed: %v", err)
+	}
+	if rate != 16000 {
+		t.Fatalf("expected 16kHz output rate, got %d", rate)
+	}
+	if len(output) != 16000 {
+		t.Fatalf("expected resampled output length 16000, got %d", len(output))
+	}
 }

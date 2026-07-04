@@ -10,6 +10,62 @@ type Segmenter struct {
 	config *DiarizationConfig
 }
 
+type sampleRange struct {
+	start int
+	end   int
+}
+
+type audioSegmentSpan struct {
+	startTime   float64
+	endTime     float64
+	startSet    bool
+	ranges      []sampleRange
+	sampleCount int
+}
+
+func (s *audioSegmentSpan) setStartTime(startTime float64) {
+	s.startTime = startTime
+	s.startSet = true
+}
+
+func (s *audioSegmentSpan) appendRange(startSample int, endSample int, sampleRate int) {
+	if startSample >= endSample {
+		return
+	}
+	if !s.startSet {
+		s.setStartTime(float64(startSample) / float64(sampleRate))
+	}
+	s.endTime = float64(endSample) / float64(sampleRate)
+	s.sampleCount += endSample - startSample
+
+	lastIndex := len(s.ranges) - 1
+	if lastIndex >= 0 && s.ranges[lastIndex].end == startSample {
+		s.ranges[lastIndex].end = endSample
+		return
+	}
+	s.ranges = append(s.ranges, sampleRange{start: startSample, end: endSample})
+}
+
+func materializeAudioSegments(audioData []float32, spans []audioSegmentSpan) []AudioSegment {
+	if len(spans) == 0 {
+		return []AudioSegment{}
+	}
+	segments := make([]AudioSegment, 0, len(spans))
+	for _, span := range spans {
+		segment := AudioSegment{
+			StartTime: span.startTime,
+			EndTime:   span.endTime,
+			Samples:   make([]float32, span.sampleCount),
+		}
+		offset := 0
+		for _, sampleRange := range span.ranges {
+			offset += copy(segment.Samples[offset:], audioData[sampleRange.start:sampleRange.end])
+		}
+		segments = append(segments, segment)
+	}
+	return segments
+}
+
 // NewSegmenter creates a new audio segmenter
 func NewSegmenter(config *DiarizationConfig) *Segmenter {
 	if config == nil {
@@ -62,22 +118,20 @@ func (s *Segmenter) SegmentByVAD(audioData []float32, sampleRate int, vadResults
 		s.config.Logger.Infof("Segmented audio into %d speech segments", len(segments))
 	}
 	return segments, nil
-	return segments, nil
 }
 
 // SegmentBySilence segments audio based on silence detection
 func (s *Segmenter) SegmentBySilence(audioData []float32, sampleRate int) ([]AudioSegment, error) {
 	// Simple energy-based silence detection
-	segments := []AudioSegment{}
+	spans := []audioSegmentSpan{}
 
 	frameSize := sampleRate / 100 // 10ms frames
 	minSegmentFrames := int(s.config.MinSegmentLength * float64(sampleRate) / float64(frameSize))
 	silenceFrames := int(s.config.SilenceThreshold * float64(sampleRate) / float64(frameSize))
+	minSegmentSamples := minSegmentFrames * frameSize
 
-	currentSegment := AudioSegment{
-		StartTime: -1,
-		Samples:   []float32{},
-	}
+	currentSegment := audioSegmentSpan{}
+	hasCurrentSegment := false
 	consecutiveSilence := 0
 
 	for i := 0; i < len(audioData); i += frameSize {
@@ -87,7 +141,6 @@ func (s *Segmenter) SegmentBySilence(audioData []float32, sampleRate int) ([]Aud
 		}
 
 		frame := audioData[i:endIndex]
-		currentTime := float64(i) / float64(sampleRate)
 
 		// Calculate RMS energy for the frame
 		energy := s.calculateRMSEnergy(frame)
@@ -97,38 +150,36 @@ func (s *Segmenter) SegmentBySilence(audioData []float32, sampleRate int) ([]Aud
 
 		if !isSilence {
 			// Speech detected
-			if currentSegment.StartTime < 0 {
-				// Start new segment
-				currentSegment.StartTime = currentTime
+			if !hasCurrentSegment {
+				currentSegment = audioSegmentSpan{}
+				hasCurrentSegment = true
 			}
-			currentSegment.EndTime = currentTime + float64(len(frame))/float64(sampleRate)
-			currentSegment.Samples = append(currentSegment.Samples, frame...)
+			currentSegment.appendRange(i, endIndex, sampleRate)
 			consecutiveSilence = 0
 		} else {
 			// Silence detected
 			consecutiveSilence++
 
 			// If we have a current segment and enough silence, end it
-			if currentSegment.StartTime >= 0 && consecutiveSilence >= silenceFrames {
-				if len(currentSegment.Samples) >= minSegmentFrames*frameSize {
-					segments = append(segments, currentSegment)
+			if hasCurrentSegment && consecutiveSilence >= silenceFrames {
+				if currentSegment.sampleCount >= minSegmentSamples {
+					spans = append(spans, currentSegment)
 				}
 
 				// Reset for next segment
-				currentSegment = AudioSegment{
-					StartTime: -1,
-					Samples:   []float32{},
-				}
+				currentSegment = audioSegmentSpan{}
+				hasCurrentSegment = false
 				consecutiveSilence = 0
 			}
 		}
 	}
 
 	// Add final segment if it exists
-	if currentSegment.StartTime >= 0 && len(currentSegment.Samples) >= minSegmentFrames*frameSize {
-		segments = append(segments, currentSegment)
+	if hasCurrentSegment && currentSegment.sampleCount >= minSegmentSamples {
+		spans = append(spans, currentSegment)
 	}
 
+	segments := materializeAudioSegments(audioData, spans)
 	if s.config.Logger != nil {
 		s.config.Logger.Infof("Segmented audio by silence into %d segments", len(segments))
 	}

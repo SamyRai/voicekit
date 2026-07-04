@@ -38,7 +38,7 @@ func NewPebbleSpeakerDatabase(dataDir string) (*PebbleSpeakerDatabase, error) {
 	// Configure level options for better performance
 	for i := 0; i < len(opts.Levels); i++ {
 		l := &opts.Levels[i]
-		l.BlockSize = 64 << 10      // 64KB blocks
+		l.BlockSize = 64 << 10       // 64KB blocks
 		l.IndexBlockSize = 256 << 10 // 256KB index blocks
 		l.TargetFileSize = 2 << 30   // 2GB target file size
 		l.Compression = pebble.ZstdCompression
@@ -106,9 +106,9 @@ func (p *PebbleSpeakerDatabase) migrateFromJSON(dataDir string) error {
 
 	// Store metadata
 	metadata := map[string]interface{}{
-		"version":     jsonDB.Version,
-		"updated_at":  jsonDB.UpdatedAt,
-		"migrated_at": time.Now(),
+		"version":       jsonDB.Version,
+		"updated_at":    jsonDB.UpdatedAt,
+		"migrated_at":   time.Now(),
 		"migrated_from": "json",
 	}
 

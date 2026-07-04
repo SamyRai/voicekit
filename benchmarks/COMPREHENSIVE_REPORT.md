@@ -1,5 +1,10 @@
-# VoiceKit Performance Benchmark Results - UPDATED
+# VoiceKit Performance Benchmark Results - Historical
 **Latest Update: Sun Jan 18 22:15:00 CET 2026**
+
+> Historical snapshot only. These numbers were captured with Go 1.25 in
+> January 2026 and should not be used as the current performance baseline.
+> Current Go 1.26.4 benchmark workflow and July 2026 measurements live in
+> `PERFORMANCE_IMPROVEMENTS.md`.
 
 ## Test Environment
 - **OS**: macOS (Darwin)

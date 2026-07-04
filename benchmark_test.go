@@ -1,11 +1,16 @@
 package voicekit
 
 import (
+	"math"
 	"testing"
 	"time"
 
 	"github.com/SamyRai/voicekit/audio"
 )
+
+var benchmarkBytesSink []byte
+var benchmarkFloatSink float32
+var benchmarkSliceSink []float32
 
 // TestBenchmarkRunner tests the benchmark runner functionality
 func TestBenchmarkRunner(t *testing.T) {
@@ -21,32 +26,48 @@ func TestBenchmarkRunner(t *testing.T) {
 	}
 }
 
-// BenchmarkVoiceKitFullPipeline benchmarks the complete VoiceKit processing pipeline
-func BenchmarkVoiceKitFullPipeline(b *testing.B) {
-	// This benchmark would require setting up a full VoiceKit instance
-	// For now, we'll create a mock benchmark that simulates the pipeline
-
-	// Simulate input audio (1 second, 16kHz, mono)
-	numSamples := 16000
-	audioData := make([]float32, numSamples)
-
-	// Fill with test data (simulated speech)
+// BenchmarkVoiceKitAudioConversionPipeline benchmarks real local audio conversion work.
+func BenchmarkVoiceKitAudioConversionPipeline(b *testing.B) {
+	sampleRate := 44100
+	duration := 0.25
+	numSamples := int(float64(sampleRate) * duration)
+	audioData := make([]float32, numSamples*2)
 	for i := 0; i < numSamples; i++ {
-		// Simple sine wave to simulate audio
-		audioData[i] = float32(sin(float64(i) * 0.01))
+		t := float64(i) / float64(sampleRate)
+		audioData[i*2] = float32(math.Sin(2 * math.Pi * 440 * t))
+		audioData[i*2+1] = float32(math.Sin(2 * math.Pi * 880 * t))
+	}
+
+	converter, err := audio.NewConverter(audio.DefaultConverterConfig())
+	if err != nil {
+		b.Fatal(err)
+	}
+	inputConfig := &audio.AudioConfig{
+		Format:        audio.FormatWAV,
+		SampleRate:    sampleRate,
+		Channels:      2,
+		BitsPerSample: 16,
+	}
+	outputConfig := &audio.AudioConfig{
+		Format:        audio.FormatPCM,
+		SampleRate:    16000,
+		Channels:      1,
+		BitsPerSample: 16,
+	}
+	inputBytes, err := converter.ConvertFromFloat32(audioData, inputConfig)
+	if err != nil {
+		b.Fatal(err)
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		// Simulate the full pipeline:
-		// 1. Audio preprocessing (already tested separately)
-		// 2. Feature extraction (simulated)
-		// 3. Speaker recognition (simulated)
-		// 4. Diarization (simulated)
-
-		_ = len(audioData) // Simulate processing
+		outputBytes, err := converter.ConvertAudio(inputBytes, inputConfig, outputConfig)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkBytesSink = outputBytes
 	}
 }
 
@@ -113,19 +134,6 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 }
 
 // BenchmarkDatabaseThroughput benchmarks database operation throughput
-func BenchmarkDatabaseThroughput(b *testing.B) {
-	// This would test database operations with our sharded implementation
-	// For now, simulate the throughput
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		// Simulate database operations
-		_ = i // Simulate work
-	}
-}
-
 // BenchmarkOptimizationImpact benchmarks the impact of our optimizations
 func BenchmarkOptimizationImpact(b *testing.B) {
 	// Compare optimized vs non-optimized patterns
@@ -133,7 +141,8 @@ func BenchmarkOptimizationImpact(b *testing.B) {
 	b.Run("Optimized_BufferPool", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			buf := audio.DefaultAudioBufferPool.Get(4096)
-			// Use buffer
+			buf[0] = float32(i)
+			benchmarkFloatSink += buf[0]
 			audio.DefaultAudioBufferPool.Put(buf)
 		}
 	})
@@ -141,16 +150,11 @@ func BenchmarkOptimizationImpact(b *testing.B) {
 	b.Run("NonOptimized_NewAlloc", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			buf := make([]float32, 4096)
-			// Use buffer
-			_ = buf
+			buf[0] = float32(i)
+			benchmarkFloatSink += buf[0]
+			benchmarkSliceSink = buf
 		}
 	})
-}
-
-// Helper function (would be in math package in real implementation)
-func sin(x float64) float64 {
-	// Simple sine approximation for benchmarking
-	return x - (x*x*x)/6 + (x*x*x*x*x)/120
 }
 
 // BenchmarkMetricsCollection benchmarks our metrics collection overhead
@@ -162,7 +166,7 @@ func BenchmarkMetricsCollection(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// Simulate metrics collection
-		duration := time.Duration(i % 1000) * time.Microsecond
+		duration := time.Duration(i%1000) * time.Microsecond
 		success := (i % 10) != 0 // 90% success rate
 
 		metrics.RecordAudioProcessing(duration, success)

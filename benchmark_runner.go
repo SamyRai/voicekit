@@ -16,13 +16,13 @@ type BenchmarkRunner struct {
 
 // BenchmarkResult represents the result of a benchmark run
 type BenchmarkResult struct {
-	Name         string
-	Duration     time.Duration
-	Allocations  uint64
-	BytesAlloc   uint64
-	Operations   int64
-	Timestamp    time.Time
-	Error        error
+	Name        string
+	Duration    time.Duration
+	Allocations uint64
+	BytesAlloc  uint64
+	Operations  int64
+	Timestamp   time.Time
+	Error       error
 }
 
 // NewBenchmarkRunner creates a new benchmark runner

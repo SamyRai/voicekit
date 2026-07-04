@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 	"github.com/SamyRai/voicekit/indexing"
 	"github.com/SamyRai/voicekit/speaker/application"
 	"github.com/SamyRai/voicekit/speaker/domain"
+	"github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 )
 
 // NewManager creates speaker recognition manager
@@ -129,10 +129,10 @@ func NewManager(config *Config) (*Manager, error) {
 		managementUseCase:  managementUseCase,
 
 		// Legacy infrastructure (for backward compatibility)
-		extractor:    extractor,
-		manager:      embeddingManager,
-		database:     shardedDB,
-		vectorIndex:  vectorIndexAdapter,
+		extractor:   extractor,
+		manager:     embeddingManager,
+		database:    shardedDB,
+		vectorIndex: vectorIndexAdapter,
 
 		// Configuration
 		threshold:    config.Threshold,

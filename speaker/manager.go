@@ -24,6 +24,13 @@ func max(a, b int) int {
 
 // extractEmbedding extracts speaker embedding from audio data
 func (m *Manager) extractEmbedding(ctx context.Context, audioData []float32, sampleRate int) ([]float32, error) {
+	if len(audioData) == 0 {
+		return nil, fmt.Errorf("audioData cannot be empty")
+	}
+	if sampleRate <= 0 {
+		return nil, fmt.Errorf("sampleRate must be positive, got %d", sampleRate)
+	}
+
 	// Check for context cancellation before expensive operation
 	select {
 	case <-ctx.Done():
@@ -54,6 +61,14 @@ func (m *Manager) extractEmbedding(ctx context.Context, audioData []float32, sam
 	}
 
 	return embedding, nil
+}
+
+// ExtractEmbedding extracts a speaker embedding from audio data.
+func (m *Manager) ExtractEmbedding(ctx context.Context, audioData []float32, sampleRate int) ([]float32, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	return m.extractEmbedding(ctx, audioData, sampleRate)
 }
 
 // calculateSimilarity calculates speaker embedding similarity

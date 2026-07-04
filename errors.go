@@ -7,27 +7,27 @@ import (
 
 // Common errors
 var (
-	ErrSpeakerNotFound        = errors.New("speaker not found")
-	ErrInvalidAudioFormat     = errors.New("invalid audio format")
-	ErrAudioProcessing        = errors.New("audio processing failed")
-	ErrEmbeddingExtraction    = errors.New("embedding extraction failed")
-	ErrDiarizationDisabled    = errors.New("diarization is disabled")
-	ErrInvalidConfiguration   = errors.New("invalid configuration")
-	ErrUnsupportedFormat      = errors.New("unsupported audio format")
-	ErrInvalidSampleRate      = errors.New("invalid sample rate")
-	ErrInvalidChannelCount    = errors.New("invalid channel count")
-	ErrResamplingFailed       = errors.New("audio resampling failed")
-	ErrChannelConversion      = errors.New("channel conversion failed")
-	ErrNormalizationFailed    = errors.New("audio normalization failed")
+	ErrSpeakerNotFound            = errors.New("speaker not found")
+	ErrInvalidAudioFormat         = errors.New("invalid audio format")
+	ErrAudioProcessing            = errors.New("audio processing failed")
+	ErrEmbeddingExtraction        = errors.New("embedding extraction failed")
+	ErrDiarizationDisabled        = errors.New("diarization is disabled")
+	ErrInvalidConfiguration       = errors.New("invalid configuration")
+	ErrUnsupportedFormat          = errors.New("unsupported audio format")
+	ErrInvalidSampleRate          = errors.New("invalid sample rate")
+	ErrInvalidChannelCount        = errors.New("invalid channel count")
+	ErrResamplingFailed           = errors.New("audio resampling failed")
+	ErrChannelConversion          = errors.New("channel conversion failed")
+	ErrNormalizationFailed        = errors.New("audio normalization failed")
 	ErrInvalidSimilarityThreshold = errors.New("invalid similarity threshold")
-	ErrDatabaseOperation      = errors.New("database operation failed")
+	ErrDatabaseOperation          = errors.New("database operation failed")
 )
 
 // AudioError represents audio processing errors
 type AudioError struct {
-	Op   string // Operation that failed
+	Op     string // Operation that failed
 	Format string // Audio format involved
-	Err  error  // Underlying error
+	Err    error  // Underlying error
 }
 
 func (e *AudioError) Error() string {

@@ -253,7 +253,7 @@ func (uc *SpeakerManagementUseCase) UpdateSpeakerName(
 // NoOpMetricsRecorder provides a no-op implementation of MetricsRecorder
 type NoOpMetricsRecorder struct{}
 
-func (m *NoOpMetricsRecorder) IncrementCounter(name string, value int64) {}
+func (m *NoOpMetricsRecorder) IncrementCounter(name string, value int64)         {}
 func (m *NoOpMetricsRecorder) RecordLatency(name string, duration time.Duration) {}
 
 // SimpleMetricsRecorder provides a simple in-memory metrics recorder

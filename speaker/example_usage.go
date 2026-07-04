@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package main
@@ -15,7 +16,7 @@ import (
 func main() {
 	// Create HNSW configuration
 	config := &indexing.Config{
-		Dimension:      128, // Embedding dimension
+		Dimension:      128,  // Embedding dimension
 		MaxElements:    1000, // Maximum vectors
 		M:              16,   // Number of connections per node
 		EfConstruction: 200,  // Construction quality

@@ -24,11 +24,19 @@ import (
 //
 // Thread-safe: can be called concurrently from multiple goroutines.
 func (m *Manager) RegisterSpeaker(speakerID, speakerName string, audioData []float32, sampleRate int) error {
+	return m.RegisterSpeakerContext(context.Background(), speakerID, speakerName, audioData, sampleRate)
+}
+
+// RegisterSpeakerContext registers a new speaker with caller-controlled cancellation.
+func (m *Manager) RegisterSpeakerContext(ctx context.Context, speakerID, speakerName string, audioData []float32, sampleRate int) error {
+	if ctx == nil {
+		return context.Canceled
+	}
 	atomic.AddInt64(&m.registrationCount, 1)
 
 	// Use clean architecture: delegate to application use case
 	err := m.managementUseCase.RegisterSpeaker(
-		context.Background(),
+		ctx,
 		domain.SpeakerID(speakerID),
 		domain.SpeakerName(speakerName),
 		audioData,
@@ -67,10 +75,18 @@ func (m *Manager) RegisterSpeaker(speakerID, speakerName string, audioData []flo
 //
 // Thread-safe: can be called concurrently from multiple goroutines.
 func (m *Manager) IdentifySpeaker(audioData []float32, sampleRate int) (*IdentifyResult, error) {
+	return m.IdentifySpeakerContext(context.Background(), audioData, sampleRate)
+}
+
+// IdentifySpeakerContext identifies a speaker with caller-controlled cancellation.
+func (m *Manager) IdentifySpeakerContext(ctx context.Context, audioData []float32, sampleRate int) (*IdentifyResult, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	atomic.AddInt64(&m.identifyRequests, 1)
 
 	// Use clean architecture: delegate to application use case
-	result, err := m.recognitionUseCase.IdentifySpeaker(context.Background(), audioData, sampleRate)
+	result, err := m.recognitionUseCase.IdentifySpeaker(ctx, audioData, sampleRate)
 	if err != nil {
 		atomic.AddInt64(&m.errorCount, 1)
 		return nil, err
@@ -108,11 +124,19 @@ func (m *Manager) IdentifySpeaker(audioData []float32, sampleRate int) (*Identif
 //
 // Thread-safe: can be called concurrently from multiple goroutines.
 func (m *Manager) VerifySpeaker(speakerID string, audioData []float32, sampleRate int) (*VerifyResult, error) {
+	return m.VerifySpeakerContext(context.Background(), speakerID, audioData, sampleRate)
+}
+
+// VerifySpeakerContext verifies a speaker with caller-controlled cancellation.
+func (m *Manager) VerifySpeakerContext(ctx context.Context, speakerID string, audioData []float32, sampleRate int) (*VerifyResult, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	atomic.AddInt64(&m.verifyRequests, 1)
 
 	// Use clean architecture: delegate to application use case
 	result, err := m.recognitionUseCase.VerifySpeaker(
-		context.Background(),
+		ctx,
 		domain.SpeakerID(speakerID),
 		audioData,
 		sampleRate,
@@ -149,8 +173,16 @@ func (m *Manager) VerifySpeaker(speakerID string, audioData []float32, sampleRat
 //
 // Thread-safe: can be called concurrently from multiple goroutines.
 func (m *Manager) GetAllSpeakers() []*SpeakerInfo {
+	return m.GetAllSpeakersContext(context.Background())
+}
+
+// GetAllSpeakersContext returns all speakers with caller-controlled cancellation.
+func (m *Manager) GetAllSpeakersContext(ctx context.Context) []*SpeakerInfo {
+	if ctx == nil {
+		return []*SpeakerInfo{}
+	}
 	// Use clean architecture: delegate to application use case
-	speakers, err := m.managementUseCase.ListSpeakers(context.Background())
+	speakers, err := m.managementUseCase.ListSpeakers(ctx)
 	if err != nil {
 		m.logger.Errorf("Failed to list speakers: %v", err)
 		return []*SpeakerInfo{}
@@ -184,6 +216,14 @@ func (m *Manager) GetAllSpeakers() []*SpeakerInfo {
 //
 // Thread-safe: can be called concurrently from multiple goroutines.
 func (m *Manager) DeleteSpeaker(speakerID string) error {
+	return m.DeleteSpeakerContext(context.Background(), speakerID)
+}
+
+// DeleteSpeakerContext removes a speaker with caller-controlled cancellation.
+func (m *Manager) DeleteSpeakerContext(ctx context.Context, speakerID string) error {
+	if ctx == nil {
+		return context.Canceled
+	}
 	// Use clean architecture: delegate to application use case
-	return m.managementUseCase.DeleteSpeaker(context.Background(), domain.SpeakerID(speakerID))
+	return m.managementUseCase.DeleteSpeaker(ctx, domain.SpeakerID(speakerID))
 }

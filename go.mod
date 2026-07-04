@@ -1,12 +1,12 @@
 module github.com/SamyRai/voicekit
 
-go 1.25.1
+go 1.26.4
 
 require (
-	github.com/cockroachdb/pebble v1.1.1
+	github.com/cockroachdb/pebble v1.1.5
 	github.com/go-audio/wav v1.1.0
-	github.com/k2-fsa/sherpa-onnx-go v1.12.20
-	github.com/viktordanov/go-hnswlib v1.3.1
+	github.com/k2-fsa/sherpa-onnx-go v1.13.3
+	github.com/viktordanov/go-hnswlib v1.4.0
 )
 
 require (
@@ -25,18 +25,18 @@ require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-linux v1.12.20 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-macos v1.12.20 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-windows v1.12.20 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.3 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.3 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.3 // indirect
 	github.com/klauspost/compress v1.16.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/matttproud/golang_protobuf_extensions v1.0.2-0.20181231171920-c182affec369 // indirect
+	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/prometheus/client_golang v1.12.0 // indirect
-	github.com/prometheus/client_model v0.2.1-0.20210607210712-147c58e9608a // indirect
-	github.com/prometheus/common v0.32.1 // indirect
-	github.com/prometheus/procfs v0.7.3 // indirect
+	github.com/prometheus/client_golang v1.15.0 // indirect
+	github.com/prometheus/client_model v0.3.0 // indirect
+	github.com/prometheus/common v0.42.0 // indirect
+	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df // indirect

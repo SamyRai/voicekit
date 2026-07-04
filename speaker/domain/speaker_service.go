@@ -225,15 +225,17 @@ func (s *SpeakerService) DeleteSpeaker(ctx context.Context, speakerID SpeakerID)
 		return ErrSpeakerNotFound
 	}
 
-	// Remove from vector index
+	var indexErr error
 	if err := s.vectorIndex.RemoveSpeaker(ctx, speakerID); err != nil {
-		// Log but don't fail - index inconsistency is better than blocking deletion
-		fmt.Printf("Warning: failed to remove speaker from index: %v\n", err)
+		indexErr = fmt.Errorf("failed to remove speaker from index: %w", err)
 	}
 
 	// Remove from repository
 	if err := s.repository.Delete(ctx, speakerID); err != nil {
 		return fmt.Errorf("failed to delete speaker: %w", err)
+	}
+	if indexErr != nil {
+		return indexErr
 	}
 
 	return nil

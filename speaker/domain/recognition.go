@@ -2,11 +2,11 @@ package domain
 
 // SpeakerIdentificationResult represents the result of a speaker identification operation
 type SpeakerIdentificationResult struct {
-	identified   bool
-	speakerID    SpeakerID
-	speakerName  SpeakerName
-	confidence   SimilarityScore
-	threshold    SimilarityScore
+	identified  bool
+	speakerID   SpeakerID
+	speakerName SpeakerName
+	confidence  SimilarityScore
+	threshold   SimilarityScore
 }
 
 // NewSpeakerIdentificationResult creates a new identification result

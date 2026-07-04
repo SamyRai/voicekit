@@ -127,6 +127,10 @@ func (m *StreamingManager) RemoveSession(sessionID string) error {
 		m.metrics.ActiveSessions.Dec()
 	}
 
+	if err := closeASRState(session.State); err != nil {
+		return fmt.Errorf("failed to close session ASR state: %w", err)
+	}
+
 	return nil
 }
 
@@ -147,8 +151,16 @@ func (m *StreamingManager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for sessionID := range m.sessions {
+	var errs []error
+	for sessionID, session := range m.sessions {
+		if err := closeASRState(session.State); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close session %s ASR state: %w", sessionID, err))
+		}
 		delete(m.sessions, sessionID)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("multiple streaming close errors: %v", errs)
 	}
 
 	return nil
@@ -203,14 +215,26 @@ func (m *StreamingManager) cleanupExpiredSessions() {
 			m.metrics.SessionDuration.Observe(duration)
 		}
 
+		_ = closeASRState(session.State)
 		delete(m.sessions, sessionID)
 
 		if m.metrics.ActiveSessions != nil {
 			m.metrics.ActiveSessions.Dec()
 		}
 	}
+}
 
-	if len(expiredSessions) > 0 {
-		fmt.Printf("Cleaned up %d expired streaming sessions\n", len(expiredSessions))
+func closeASRState(state *types.StreamingState) error {
+	if state == nil || state.ASRState == nil {
+		return nil
 	}
+	defer func() {
+		state.ASRState = nil
+	}()
+
+	closer, ok := state.ASRState.(interface{ Close() error })
+	if !ok {
+		return nil
+	}
+	return closer.Close()
 }

@@ -39,6 +39,15 @@ func (m *IDMapper) GetIntID(stringID string) int {
 	return id
 }
 
+// LookupIntID returns the integer ID for a string ID without creating a mapping.
+func (m *IDMapper) LookupIntID(stringID string) (int, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	id, exists := m.stringToInt[stringID]
+	return id, exists
+}
+
 // GetStringID returns the string ID for an integer ID
 func (m *IDMapper) GetStringID(intID int) (string, bool) {
 	m.mu.RLock()

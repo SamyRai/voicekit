@@ -1,17 +1,28 @@
 # VoiceKit
 
-A reusable Go library for voice processing operations including speaker recognition, diarization, and audio processing. Designed to be easily copied to other projects with minimal dependencies.
+A reusable Go 1.26.4 library for local voice processing experiments and audio plumbing. VoiceKit now defaults to audio-only initialization; speaker recognition, ASR, VAD, diarization, and TTS are opt-in runtime components that require explicit model configuration.
 
-## Features
+## Requirements
 
-- **Real-Time ASR Streaming**: Streaming automatic speech recognition with <500ms latency
-- **Speaker Recognition**: Register speakers, identify unknown speakers, and verify speaker identities
-- **Audio Processing**: Resampling, format conversion, normalization, and channel conversion
-- **Speaker Diarization**: Segment audio by speaker and integrate with ASR results
-- **Voice Activity Detection**: VAD integration for intelligent speech processing
-- **Modular Design**: Use individual components or the unified VoiceKit interface
-- **Clean API**: Simple factory functions and consistent interfaces
-- **Production Ready**: Comprehensive monitoring, error handling, and performance optimization
+- Go 1.26.4 or newer 1.26.x toolchain.
+- CGO enabled for Sherpa-ONNX-backed ASR, VAD, diarization, speaker embeddings, and TTS.
+- Model files supplied by the caller or deployment environment. This repository does not commit model assets.
+
+## Maturity Matrix
+
+| Capability | Status | Runtime requirements |
+| --- | --- | --- |
+| Audio conversion/resampling | Usable foundation | WAV/PCM only for in-library encode/decode; compressed formats return explicit unsupported errors. |
+| Speaker recognition | Experimental but real | Sherpa speaker embedding model path and speaker data directory. Speaker embedding streams are single-use and released after extraction. |
+| ASR | Sherpa offline transcriber plus Sherpa online streaming service | Offline or online Sherpa model files. ASR enabled without required backend paths is a validation error. |
+| VAD | Runtime seam with explicit providers | `none`, `energy`, or Sherpa Silero/TEN with a configured model path. |
+| Diarization | Sherpa offline diarization backend | Segmentation and embedding model paths. The old silence/clustering path is an explicit `basic` backend for tests/local experiments. |
+| TTS | Sherpa offline speech synthesizer | VITS, Matcha, Kokoro, KittenTTS, ZipVoice, Pocket, or Supertonic model files. TTS enabled without required backend paths is a validation error. |
+| Meeting intelligence | Product-domain foundation | Typed meeting artifacts, deterministic mapping from diarized ASR output, Markdown/JSON/SRT/WebVTT exports, export-time redaction enforcement, provider-neutral analysis, a stdlib-only reference analyzer, and deterministic evaluation metrics. |
+
+For the developer handoff guide covering meeting data flow, analyzer extension
+points, redaction/export safety, evaluation metrics, and validation commands,
+see [MEETING_INTELLIGENCE.md](MEETING_INTELLIGENCE.md).
 
 ## Installation
 
@@ -61,10 +72,12 @@ VoiceKit implements a modular, layered architecture for voice processing operati
 ### Component Responsibilities
 
 - **VoiceKit (Top Level)**: Orchestrates component interactions, provides unified API
-- **ASR Streaming**: Real-time speech recognition with streaming session management
+- **ASR**: Offline transcription through `Transcriber` and real-time recognition through `ASRService`
 - **Audio Processing**: Handles sample rate conversion, format transcoding, normalization
 - **Speaker Recognition**: Manages speaker embeddings, similarity computation, database operations
-- **Diarization**: Performs audio segmentation, speaker clustering, result integration
+- **Diarization**: Adapts Sherpa offline speaker diarization into VoiceKit result types
+- **TTS**: Synthesizes complete text inputs to normalized PCM samples through Sherpa offline TTS
+- **Meeting Intelligence**: Maps diarized ASR results into meeting artifacts, exports notes/captions, redacts sensitive text before export when required, validates provider-neutral analyzer output, and measures deterministic meeting-quality metrics
 - **VAD Processing**: Voice activity detection for intelligent audio segmentation
 
 ### Technical Approaches
@@ -77,22 +90,29 @@ VoiceKit implements a modular, layered architecture for voice processing operati
 
 #### Speaker Recognition Architecture
 - **Embedding Extraction**: Leverages Sherpa-ONNX neural network inference
+- **Native Stream Lifecycle**: Creates a fresh embedding stream per extraction and deletes it after `InputFinished`
 - **Similarity Computation**: Uses cosine similarity on normalized embedding vectors
 - **Database Design**: JSON-based persistence with in-memory caching for fast lookups
 - **Thread Safety**: RWMutex-based concurrent access to speaker database
 
-#### ASR Streaming Architecture
-- **Real-Time Processing**: Streaming session management with <500ms end-to-end latency
+#### ASR Architecture
+- **Offline Transcription**: `asr.SherpaOfflineModel` maps complete audio inputs to `types.Transcription`
+- **Streaming Lifecycle**: Sherpa online recognition keeps one native stream per VoiceKit session, calls `InputFinished` only on finalization, and deletes stream state on endpoint/session cleanup/service close
 - **Model Registry**: Dynamic model selection based on language and performance requirements
 - **Audio Buffering**: Cache-aware audio buffering with overlap handling for continuous processing
-- **VAD Integration**: Voice activity detection for intelligent speech/non-speech segmentation
-- **Multi-Model Support**: Whisper, Nemotron, Parakeet, Moonshine with quantization options
+- **VAD Integration**: Explicit `none`, `energy`, Sherpa Silero, and Sherpa TEN providers
+- **Test/Demo Fakes**: Fake ASR models are available only through explicit registration
 
 #### Diarization Architecture
-- **Segmentation Strategies**: Multiple algorithms (VAD-based, silence-based, fixed-length)
-- **Clustering**: Agglomerative hierarchical clustering with similarity thresholds
+- **Backend Boundary**: `diarization.Backend` owns native processing and lifecycle
+- **Sherpa Offline Backend**: Uses Sherpa segmentation, embedding, clustering, and min-duration settings
+- **Basic Backend**: Keeps the old silence-plus-embedding clustering path available only by explicit `BackendBasic`
 - **Integration**: Time-based alignment between audio segments and ASR word timestamps
-- **Speaker Database Abstraction**: Interface-based design for pluggable speaker backends
+
+#### TTS Architecture
+- **Offline Synthesis**: `tts.SherpaOfflineSynthesizer` maps text requests to Sherpa-generated float32 PCM samples
+- **Family-Specific Config**: Supported Sherpa families have explicit config blocks instead of one flat path bag
+- **Resource Lifecycle**: Native TTS resources are owned by the synthesizer and closed through `VoiceKit.Close`
 
 ## Technical Implementation Details
 
@@ -175,7 +195,7 @@ type SpeakerError struct {
 
 #### ASR Integration
 - **Word-Level Alignment**: Uses timestamp information for precise speaker-text alignment
-- **Confidence Propagation**: Combines audio and speaker recognition confidence scores
+- **Confidence Propagation**: Preserves confidence fields when upstream systems provide them; Sherpa ASR confidence is `0` when not exposed by the binding
 - **Metadata Preservation**: Maintains original ASR metadata alongside speaker information
 
 #### WebSocket Streaming
@@ -242,13 +262,18 @@ type Logger interface {
 - **Audio Conversion**: O(n) where n is sample count, dominated by resampling
 - **Speaker Recognition**: O(m*k) where m is speakers, k is embedding dimension
 - **Diarization**: O(s²) where s is number of segments (clustering complexity)
-- **ASR Streaming**: ~500ms per 1-second chunk, <200ms first token (Whisper/Nemotron)
+- **ASR Streaming**: Depends on the configured Sherpa model, provider, hardware, and chunk size
 
 ### Memory Usage
 - **Audio Buffers**: Proportional to audio duration and sample rate
 - **Speaker Database**: Scales with number of enrolled speakers
 - **Embedding Cache**: Fixed size per speaker (typically 192 floats)
-- **ASR Models**: 100KB-200KB per operation, varies by model/quantization
+- **ASR Models**: Native model memory depends on the configured Sherpa model family, provider, and quantization; model assets are not bundled
+
+### Measured Local Baseline
+- **Current baseline**: Go 1.26.4, darwin/arm64, Apple M2, local CPU benchmarks.
+- **Latest measured wins**: WAV/PCM decode and basic diarization allocation paths were optimized in July 2026; see `PERFORMANCE_IMPROVEMENTS.md` for the benchstat table and exact workflow.
+- **Benchmark artifacts**: Write ad hoc before/after files outside tracked source, for example `/tmp/voicekit-benchmarks`.
 
 ### Scalability Considerations
 - **Horizontal**: Stateless audio processing scales linearly
@@ -280,25 +305,36 @@ type Logger interface {
 ## Limitations and Known Issues
 
 ### Audio Format Support
-- **Compressed Formats**: MP3/FLAC/OGG encoding/decoding are placeholder implementations
+- **Compressed Formats**: MP3/FLAC/OGG/M4A/AAC encode/decode are not implemented and return explicit unsupported-format errors
 - **Metadata**: Format-specific metadata (tags, etc.) not preserved
 - **Sample Rates**: Limited testing on extreme sample rates (>192kHz, <8kHz)
 
 ### Speaker Recognition
 - **Model Dependencies**: Requires specific Sherpa-ONNX model files
 - **Embedding Quality**: Performance depends on training data quality
-- **Real-time Constraints**: Batch processing may introduce latency
+- **Real-time Constraints**: Embedding extraction is single-use stream based until model-backed benchmarks prove a safe pooling strategy
 
 ### Diarization
-- **Accuracy**: Simple clustering algorithms may not match research implementations
-- **Speaker Count**: Limited testing with large numbers of speakers (>20)
-- **Language Dependency**: Performance may vary across languages
+- **Model Dependencies**: Production diarization requires Sherpa segmentation and embedding model files
+- **Speaker Count**: Clustering quality depends on configured threshold or exact cluster count
+- **Native Runtime**: Sherpa calls are mutex-protected until concurrency benchmarks prove shared native use is safe
 
-### ASR Streaming
-- **Model Dependencies**: Requires specific Whisper/Nemotron/Parakeet model files
-- **GPU Requirements**: High-performance models require GPU for optimal latency
-- **Quantization Trade-offs**: INT4 quantization may reduce accuracy in noisy conditions
-- **Language Support**: Best performance with English; multilingual support varies
+### ASR
+- **Model Dependencies**: Requires Sherpa offline or online model files, depending on `ASR.Backend`
+- **CGO Requirements**: Uses Sherpa ONNX native bindings; CGO must be enabled
+- **Runtime Provider**: CPU is the default; CUDA/CoreML availability depends on the Sherpa build and platform
+- **Language Support**: Determined by the configured Sherpa model
+- **Streaming Finalization**: `ProcessAudioChunk` returns partial results until native endpoint detection or VAD finalization produces a final result
+
+### TTS
+- **Model Dependencies**: Requires Sherpa offline TTS model files for the configured family
+- **Output Format**: `SynthesizedSpeech` returns normalized float32 samples; callers own encoding to WAV/PCM containers
+- **Voice Selection**: Speaker IDs are validated against the native model-reported speaker count when available
+
+### Meeting Intelligence
+- **Reference Analyzer**: `meeting.HeuristicAnalyzer` is a deterministic baseline for local examples and tests, not an LLM-quality summarizer.
+- **Redaction Scope**: The built-in redactor covers emails, phone-like numbers, URLs, and configured literal terms. It is not a complete privacy, consent, retention, or compliance system.
+- **Evaluation Scope**: The `evaluation` package provides deterministic fixture metrics. It does not yet include DER, model-backed benchmark corpora, or hosted-provider comparisons.
 
 ### Memory Management
 - **Large Files**: Memory usage scales linearly with audio duration
@@ -309,8 +345,9 @@ type Logger interface {
 
 ### Planned Improvements
 - **GPU Acceleration**: Enhanced CUDA/OpenCL integration for neural network inference
-- **Advanced Clustering**: Integration with scikit-learn style clustering algorithms
-- **ASR Model Expansion**: Support for additional models (Distil-Whisper, Moonshine, Kroko)
+- **Diarization Evaluation**: DER-focused benchmarks across Sherpa diarization models and thresholds
+- **ASR Model Expansion**: Additional Sherpa offline model families beyond transducer, Paraformer, CTC, SenseVoice, and Whisper
+- **TTS Evaluation**: MOS-style and latency benchmarks across Sherpa TTS model families
 - **Two-Pass Decoding**: CTC + attention for improved streaming accuracy
 - **WebRTC Integration**: Native WebRTC support for ultra-low latency streaming
 - **Model Quantization**: 8-bit quantization for reduced memory footprint
@@ -356,17 +393,6 @@ func main() {
         Diarization: voicekit.DiarizationConfig{
             Enabled: true,
             Logger:  logger,
-        },
-        ASR: voicekit.ASRConfig{
-            Enabled:              true,
-            DefaultModel:         "whisper_large_v3",
-            Language:             "en",
-            Quantization:         "int8",
-            MaxConcurrentStreams: 10,
-            StreamTimeout:        300,
-            ChunkSize:            16000,
-            VADProvider:          "ten_vad",
-            Logger:               logger,
         },
     }
 
@@ -415,17 +441,25 @@ import (
 )
 
 func main() {
-    // Configure VoiceKit with ASR enabled
+    // Configure VoiceKit with Sherpa online ASR enabled.
+    // Model files are not committed to this repository.
     config := &voicekit.Config{
         ASR: voicekit.ASRConfig{
             Enabled:              true,
-            DefaultModel:         "whisper_large_v3",
+            Backend:              "sherpa_online",
+            DefaultModel:         "sherpa_online",
             Language:             "en",
-            Quantization:         "int8",
+            Quantization:         "float32",
             MaxConcurrentStreams: 10,
             StreamTimeout:        300,
             ChunkSize:            16000,
-            VADProvider:          "ten_vad",
+            Online: voicekit.OnlineConfig{
+                TokensPath:  "/models/sherpa/tokens.txt",
+                EncoderPath: "/models/sherpa/encoder.onnx",
+                DecoderPath: "/models/sherpa/decoder.onnx",
+                JoinerPath:  "/models/sherpa/joiner.onnx",
+            },
+            VADProvider:          "none",
         },
     }
 
@@ -477,6 +511,90 @@ func generateAudioChunk() []float32 {
     chunk := make([]float32, 16000)
     // Fill with actual audio data or synthesized speech
     return chunk
+}
+```
+
+### ASR Offline
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/SamyRai/voicekit"
+)
+
+func main() {
+    config := &voicekit.Config{
+        ASR: voicekit.ASRConfig{
+            Enabled:      true,
+            Backend:      "sherpa_offline",
+            DefaultModel: "sherpa_offline",
+            Language:     "en",
+            Offline: voicekit.OfflineConfig{
+                ModelFamily: "sense_voice",
+                ModelPath:   "/models/sherpa/sense-voice.onnx",
+                Language:    "en",
+            },
+        },
+    }
+
+    vk, err := voicekit.NewVoiceKit(config)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer vk.Close()
+
+    result, err := vk.Transcriber().Transcribe(context.Background(), loadSamples(), 16000)
+    if err != nil {
+        log.Fatal(err)
+    }
+    log.Println(result.Text)
+}
+```
+
+### TTS Offline
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/SamyRai/voicekit"
+)
+
+func main() {
+    config := &voicekit.Config{
+        TTS: voicekit.TTSConfig{
+            Enabled:     true,
+            Backend:     "sherpa_offline",
+            ModelFamily: "kokoro",
+            Kokoro: voicekit.TTSKokoroConfig{
+                Model:   "/models/sherpa/kokoro/model.onnx",
+                Voices:  "/models/sherpa/kokoro/voices.bin",
+                Tokens:  "/models/sherpa/kokoro/tokens.txt",
+                DataDir: "/models/sherpa/kokoro/espeak-ng-data",
+            },
+        },
+    }
+
+    vk, err := voicekit.NewVoiceKit(config)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer vk.Close()
+
+    result, err := vk.Synthesizer().Synthesize(context.Background(), voicekit.SynthesisRequest{
+        Text: "VoiceKit can synthesize speech locally.",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    log.Println(result.SampleRate, len(result.Samples), result.Duration)
 }
 ```
 
@@ -577,14 +695,17 @@ import (
 )
 
 func main() {
-    // Create diarization manager
     config := diarization.DefaultDiarizationConfig()
     config.Enabled = true
+    config.Backend = diarization.BackendSherpaOffline
+    config.SegmentationModelPath = "/models/sherpa/segmentation.onnx"
+    config.EmbeddingModelPath = "/models/sherpa/embedding.onnx"
 
-    // Use a mock speaker database (or implement your own)
-    speakerDB := &mySpeakerDatabase{}
-
-    manager := diarization.NewManager(config, speakerDB)
+    manager, err := diarization.NewManager(config, nil)
+    if err != nil {
+        panic(err)
+    }
+    defer manager.Close()
 
     // Process audio for diarization
     audioData := loadAudioSamples() // []float32
@@ -606,25 +727,31 @@ func main() {
 ### VoiceKit (Unified Interface)
 
 #### `NewVoiceKit(config *Config) (*VoiceKit, error)`
-Creates a new VoiceKit instance with all components initialized.
+Creates a new VoiceKit instance with audio initialized and optional runtime components initialized only when enabled/configured.
 
-#### `(*VoiceKit) Close()`
+#### `(*VoiceKit) Close() error`
 Releases all resources held by VoiceKit.
 
 #### `(*VoiceKit) Speaker() *speaker.Manager`
-Returns the speaker recognition manager.
+Returns the speaker recognition manager, or nil when speaker recognition is not configured.
 
 #### `(*VoiceKit) Audio() *audio.Converter`
 Returns the audio converter.
 
 #### `(*VoiceKit) Diarization() *diarization.Manager`
-Returns the diarization manager.
+Returns the diarization manager, or nil when diarization is disabled.
 
 #### `(*VoiceKit) ASR() ASRService`
-Returns the ASR service for real-time speech recognition.
+Returns the ASR service for real-time speech recognition, or nil when ASR is disabled or configured for offline transcription.
+
+#### `(*VoiceKit) Transcriber() Transcriber`
+Returns the batch/offline ASR transcriber, or nil when ASR is disabled or configured for streaming.
+
+#### `(*VoiceKit) Synthesizer() SpeechSynthesizer`
+Returns the text-to-speech synthesizer, or nil when TTS is disabled.
 
 #### `(*VoiceKit) ProcessAudio(audioData []byte, inputConfig *audio.AudioConfig, sessionID string) (*speaker.IdentifyResult, *diarization.DiarizationResult, error)`
-Processes audio through the full pipeline: conversion, speaker identification, and diarization.
+Always converts audio; runs speaker identification and diarization only when those managers are configured.
 
 ### Speaker Recognition
 
@@ -665,8 +792,11 @@ Resamples audio to a different sample rate.
 
 ### Diarization
 
-#### `diarization.NewManager(config *DiarizationConfig, speakerDB SpeakerDatabase) *Manager`
-Creates a new diarization manager.
+#### `diarization.NewManager(config *DiarizationConfig, speakerDB SpeakerDatabase) (*Manager, error)`
+Creates a new diarization manager for the configured backend.
+
+#### `diarization.NewManagerWithBackend(config *DiarizationConfig, speakerDB SpeakerDatabase, extractor EmbeddingExtractor) (*Manager, error)`
+Creates a new diarization manager with an explicit extractor for the `basic` backend.
 
 #### `(*Manager) ProcessAudio(audioData []float32, sampleRate int, sessionID string) (*DiarizationResult, error)`
 Processes audio for speaker diarization.
@@ -677,6 +807,111 @@ Creates a new audio segmenter.
 #### `(*Segmenter) SegmentBySilence(audioData []float32, sampleRate int) ([]AudioSegment, error)`
 Segments audio based on silence detection.
 
+### Meeting Intelligence
+
+#### `meeting.FromIntegratedResult(result *diarization.IntegratedResult, options meeting.BuildOptions) (*meeting.Meeting, error)`
+Maps a typed ASR plus diarization result into a meeting artifact with transcript turns, participant labels, source metadata, and timing validation.
+
+#### `(*meeting.Meeting) Validate() error`
+Validates required meeting IDs, participant uniqueness, wall-clock timing, transcript turn timing, and word timing.
+
+#### `(*meeting.Meeting) Duration() time.Duration`
+Returns the best-known meeting duration from wall-clock start/end times or transcript turn timing.
+
+#### `(*meeting.Meeting) SpeakerTalkTime() map[string]time.Duration`
+Returns total transcript duration by diarization speaker ID.
+
+#### `(*meeting.Meeting) ExportJSON() ([]byte, error)`
+Returns stable product-facing JSON with transcript and summary timing represented in seconds.
+
+#### `(*meeting.Meeting) ExportJSONWithOptions(options meeting.ExportOptions) ([]byte, error)`
+Returns JSON while applying export safety options such as required prior redaction.
+
+#### `(*meeting.Meeting) ExportMarkdown() (string, error)`
+Renders meeting metadata, summary sections, action items, and transcript turns as Markdown notes.
+
+#### `(*meeting.Meeting) ExportMarkdownWithOptions(options meeting.ExportOptions) (string, error)`
+Renders Markdown while applying export safety options such as required prior redaction.
+
+#### `(*meeting.Meeting) ExportSRT() (string, error)`
+Renders speaker-labeled transcript turns as SubRip subtitles. Caption exports require positive turn timing.
+
+#### `(*meeting.Meeting) ExportSRTWithOptions(options meeting.ExportOptions) (string, error)`
+Renders SubRip subtitles while applying export safety options such as required prior redaction.
+
+#### `(*meeting.Meeting) ExportWebVTT() (string, error)`
+Renders speaker-labeled transcript turns as WebVTT captions. Caption exports require positive turn timing.
+
+#### `(*meeting.Meeting) ExportWebVTTWithOptions(options meeting.ExportOptions) (string, error)`
+Renders WebVTT captions while applying export safety options such as required prior redaction.
+
+#### `meeting.ExportOptions`
+Configures export-time safety checks:
+
+```go
+type ExportOptions struct {
+    RequireRedaction bool
+}
+```
+
+When `RequireRedaction` is true, export methods return `meeting.ErrRedactionRequired` unless the meeting was produced by `Meeting.Redact`.
+
+#### `meeting.Redactor`
+Defines the redaction boundary used before export:
+
+```go
+type Redactor interface {
+    Redact(field string, text string) (string, []RedactionMatch, error)
+}
+```
+
+#### `meeting.DefaultRedactionPolicy()` and `meeting.NewPatternRedactor(policy meeting.RedactionPolicy)`
+Create the built-in stdlib redactor for emails, phone-like numbers, URLs, and configured literal terms. `RedactionMatch` records field, kind, byte offsets, and replacement text without storing the raw matched value.
+
+#### `(*meeting.Meeting) Redact(redactor meeting.Redactor) (meeting.Meeting, meeting.RedactionReport, error)`
+Returns a redacted meeting copy, marks it as redacted, and reports the redaction matches across meeting metadata, participants, transcript turns, word text, and summary artifacts.
+
+#### `meeting.Analyzer`
+Defines a provider-neutral analysis boundary:
+
+```go
+type Analyzer interface {
+    AnalyzeMeeting(ctx context.Context, meeting Meeting, request AnalysisRequest) (*AnalysisResult, error)
+}
+```
+
+#### `(*meeting.Meeting) Analyze(ctx context.Context, analyzer meeting.Analyzer, request meeting.AnalysisRequest) (meeting.Meeting, meeting.AnalysisResult, error)`
+Runs a caller-supplied analyzer, normalizes the output, validates transcript evidence IDs, and returns a copy of the meeting with `Summary` applied.
+
+#### `meeting.HeuristicAnalyzer`
+Provides a stdlib-only deterministic reference analyzer for local examples and baseline tests. It extracts an overview, decisions, action items, open questions, and risks from transcript text using simple rules and transcript turn IDs as evidence IDs. It is not an LLM-quality analyzer.
+
+#### `(*meeting.Meeting) WithAnalysis(result meeting.AnalysisResult) (meeting.Meeting, meeting.AnalysisResult, error)`
+Applies already-generated analyzer output to a meeting copy after normalization and validation.
+
+#### `(meeting.MeetingSummary) Normalize() meeting.MeetingSummary`
+Trims generated text, fills stable artifact IDs, defaults missing action item status to `proposed`, and removes empty/duplicate evidence IDs.
+
+#### `(meeting.MeetingSummary) ValidateForMeeting(meeting.Meeting) error`
+Validates generated topics, decisions, action items, follow-ups, open questions, risks, timing, statuses, duplicate IDs, and transcript evidence references.
+
+### Meeting Evaluation
+
+#### `evaluation.EvaluateMeeting(reference evaluation.MeetingReference, prediction meeting.Meeting) (evaluation.Report, error)`
+Scores a predicted meeting against deterministic fixture data. The report includes transcript WER/CER, turn-level speaker attribution accuracy, exact normalized action-item precision/recall/F1, and an optional real-time factor.
+
+#### `evaluation.EvaluateTranscriptText(reference []evaluation.ReferenceTurn, prediction []meeting.TranscriptTurn) evaluation.TextReport`
+Computes word and character edit-distance metrics using stable normalization.
+
+#### `evaluation.EvaluateSpeakerAttribution(reference []evaluation.ReferenceTurn, prediction []meeting.TranscriptTurn) evaluation.SpeakerAttributionReport`
+Compares speaker IDs by transcript turn ID with index fallback for fixture data that omits IDs.
+
+#### `evaluation.EvaluateActionItems(reference []meeting.ActionItem, prediction []meeting.ActionItem) evaluation.ClassificationReport`
+Scores extracted action items with exact normalized text matching.
+
+#### `evaluation.RealTimeFactor(processingDuration time.Duration, audioDuration time.Duration) (float64, error)`
+Returns processing duration divided by audio duration and rejects invalid durations.
+
 ### ASR Streaming
 
 #### `asr.NewService(config *voicekit.ASRConfig) (*Service, error)`
@@ -684,6 +919,8 @@ Creates a new ASR service for real-time speech recognition.
 
 #### `(*Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio []float32) (*types.Transcription, error)`
 Processes a chunk of audio for streaming ASR, returning partial or final transcription results.
+
+VoiceKit keeps the native Sherpa online stream in session state across chunks. Finalization flushes the stream with `InputFinished`, deletes it, and clears the session ASR state so a later utterance starts with a fresh stream.
 
 #### `(*Service) RegisterModel(model asr.Model) error`
 Registers a new ASR model with the service.
@@ -697,6 +934,22 @@ Selects the best ASR model based on language and performance requirements.
 #### `(*Service) Close() error`
 Closes the ASR service and releases all resources.
 
+### ASR Offline
+
+#### `asr.NewSherpaOfflineModel(config *voicekit.ASRConfig) (*SherpaOfflineModel, error)`
+Creates a Sherpa offline transcriber for complete audio inputs.
+
+#### `(*SherpaOfflineModel) Transcribe(ctx context.Context, audio []float32, sampleRate int) (*types.Transcription, error)`
+Transcribes a complete audio buffer with non-empty audio validation before native Sherpa calls.
+
+### TTS Offline
+
+#### `tts.NewSherpaOfflineSynthesizer(config *voicekit.TTSConfig) (*SherpaOfflineSynthesizer, error)`
+Creates a Sherpa offline speech synthesizer for complete text inputs.
+
+#### `(*SherpaOfflineSynthesizer) Synthesize(ctx context.Context, request types.SynthesisRequest) (*types.SynthesizedSpeech, error)`
+Synthesizes text into normalized float32 PCM samples with non-empty text validation before native Sherpa calls.
+
 ## Configuration
 
 ### Main Config
@@ -706,6 +959,7 @@ type Config struct {
     Speaker     SpeakerConfig
     Diarization DiarizationConfig
     ASR         ASRConfig
+    TTS         TTSConfig
 }
 ```
 
@@ -733,15 +987,17 @@ type SpeakerConfig struct {
 ### Diarization Config
 ```go
 type DiarizationConfig struct {
-    Enabled               bool    // Whether diarization is enabled
-    MinSegmentLength      float64 // Minimum segment length in seconds
-    MaxSegmentLength      float64 // Maximum segment length in seconds
-    SilenceThreshold      float64 // Silence threshold for segmentation
-    SimilarityThreshold   float64 // Similarity threshold for clustering
-    MaxSpeakers           int     // Maximum number of speakers to detect
-    ReassignmentThreshold float64 // Threshold for speaker reassignment
-    OverlapThreshold      float64 // Overlap threshold for speaker turns
-    Logger                Logger  // Optional logger
+    Enabled               bool
+    Backend               string  // "sherpa_offline" or explicit "basic"
+    SegmentationModelPath string  // Sherpa diarization segmentation model
+    EmbeddingModelPath    string  // Sherpa speaker embedding model
+    Provider              string  // "cpu", "cuda", or "coreml"
+    NumThreads            int
+    ClusteringThreshold   float32
+    NumClusters           int     // Optional exact speaker count
+    MinDurationOn         float32
+    MinDurationOff        float32
+    Logger                Logger
 }
 ```
 
@@ -749,14 +1005,65 @@ type DiarizationConfig struct {
 ```go
 type ASRConfig struct {
     Enabled              bool    // Whether ASR is enabled
-    DefaultModel         string  // Default ASR model ("whisper_large_v3")
+    Backend              string  // "sherpa_offline" or "sherpa_online"
+    DefaultModel         string  // Default model/transcriber name
     Language             string  // Default language ("en")
-    Quantization         string  // Quantization level ("int8", "int4", "float16", "float32")
+    Quantization         string  // Informational quantization label
     MaxConcurrentStreams int     // Maximum concurrent streaming sessions
     StreamTimeout        int     // Stream timeout in seconds
     ChunkSize            int     // Audio chunk size in samples (16000 = 1 second at 16kHz)
-    VADProvider          string  // VAD provider ("ten_vad", "silero_vad", "webrtc_vad", "quail_vad")
+    SampleRate           int     // ASR sample rate
+    FeatureDim           int     // Sherpa feature dimension
+    Provider             string  // Sherpa runtime provider ("cpu", "cuda", "coreml")
+    NumThreads           int     // Sherpa thread count
+    Online               OnlineConfig
+    Offline              OfflineConfig
+    VADProvider          string  // "none", "energy", "silero_vad", or "ten_vad"
+    VADModelPath         string  // Required for Sherpa VAD providers
     Logger               Logger  // Optional logger
+}
+
+type OnlineConfig struct {
+    TokensPath  string
+    EncoderPath string
+    DecoderPath string
+    JoinerPath  string
+    ModelPath   string
+    ModelType   string
+}
+
+type OfflineConfig struct {
+    ModelFamily string // "transducer", "paraformer", "zipformer_ctc", "nemo_ctc", "sense_voice", or "whisper"
+    TokensPath  string
+    EncoderPath string
+    DecoderPath string
+    JoinerPath  string
+    ModelPath   string
+    Language    string
+    Task        string // Whisper task, usually "transcribe"
+}
+```
+
+### TTS Config
+```go
+type TTSConfig struct {
+    Enabled         bool
+    Backend         string // "sherpa_offline"
+    ModelFamily     string // "vits", "matcha", "kokoro", "kitten", "zipvoice", "pocket", or "supertonic"
+    Provider        string // Sherpa runtime provider ("cpu", "cuda", "coreml")
+    NumThreads      int
+    MaxNumSentences int
+    SilenceScale    float32
+    SpeakerID       int
+    Speed           float32
+    Vits            TTSVitsConfig
+    Matcha          TTSMatchaConfig
+    Kokoro          TTSKokoroConfig
+    Kitten          TTSKittenConfig
+    Zipvoice        TTSZipvoiceConfig
+    Pocket          TTSPocketConfig
+    Supertonic      TTSSupertonicConfig
+    Logger          Logger
 }
 ```
 
@@ -768,6 +1075,7 @@ VoiceKit provides specific error types for different components:
 - `SpeakerError`: Speaker recognition errors
 - `DiarizationError`: Diarization errors
 - `ASRError`: ASR streaming errors
+- TTS returns wrapped configuration or synthesis errors from the `tts` package
 
 All errors implement `Unwrap()` for compatibility with `errors.Is()` and `errors.As()`.
 
@@ -788,6 +1096,8 @@ type Logger interface {
 See the `examples/` directory for complete working examples:
 - `examples/basic_usage/` - Basic VoiceKit usage
 - `examples/asr_streaming/` - Real-time ASR streaming
+- `examples/asr_offline/` - Batch/offline ASR transcription
+- `examples/tts_offline/` - Batch/offline speech synthesis
 - `examples/speaker_only/` - Speaker recognition only
 - `examples/audio_processing/` - Audio format conversion
 - `examples/diarization/` - Speaker diarization
@@ -796,31 +1106,42 @@ See the `examples/` directory for complete working examples:
 
 ### ASR Models
 
-VoiceKit supports multiple ASR models with different performance characteristics:
+VoiceKit's ASR runtime uses explicit Sherpa backend configs:
 
-#### Whisper Models (Recommended for Multilingual)
-- **Model**: OpenAI Whisper Large-v3
-- **Languages**: 99+ languages
-- **Performance**: ~500ms latency, high accuracy
-- **Download**: Available via Hugging Face or direct integration
+- `ASR.Backend = "sherpa_offline"` uses `ASR.Offline`.
+  Supported first-pass families are `transducer`, `paraformer`, `zipformer_ctc`, `nemo_ctc`, `sense_voice`, and `whisper`.
+- `ASR.Backend = "sherpa_online"` uses `ASR.Online`.
+  Online transducer requires `Online.TokensPath`, `Online.EncoderPath`, `Online.DecoderPath`, and `Online.JoinerPath`.
+  Online CTC requires `Online.TokensPath`, `Online.ModelPath`, and `Online.ModelType`.
 
-#### Nemotron Speech ASR (Recommended for English)
-- **Model**: NVIDIA Nemotron Speech ASR 0.6B
-- **Languages**: English
-- **Performance**: 80-160ms latency, ultra-low latency
-- **Requirements**: GPU recommended for optimal performance
+ASR is disabled by default. If `ASR.Enabled` is true and required model files are absent, configuration validation fails.
 
-#### Parakeet TDT (Recommended for High Throughput)
-- **Model**: NVIDIA Parakeet TDT 0.6B
-- **Languages**: English + multilingual variants
-- **Performance**: High throughput, streaming optimized
-- **Requirements**: GPU recommended
+### TTS Models
 
-#### Moonshine Models (Recommended for Edge/CPU)
-- **Model**: Moonshine (27M-120M variants)
-- **Languages**: Multilingual or monolingual
-- **Performance**: CPU-friendly, low resource usage
-- **Requirements**: Works on CPU, edge devices
+VoiceKit's TTS runtime uses `TTS.Backend = "sherpa_offline"` and `TTS.ModelFamily` to choose a Sherpa offline TTS family. Supported families are `vits`, `matcha`, `kokoro`, `kitten`, `zipvoice`, `pocket`, and `supertonic`.
+
+TTS is disabled by default. If `TTS.Enabled` is true and required model files or data directories are absent, configuration validation fails.
+
+### Diarization Models
+
+Production diarization uses `Diarization.Backend = "sherpa_offline"` and requires:
+
+- `SegmentationModelPath`: Sherpa offline diarization segmentation model.
+- `EmbeddingModelPath`: Sherpa speaker embedding model.
+- Optional clustering settings: `ClusteringThreshold`, `NumClusters`, `MinDurationOn`, and `MinDurationOff`.
+
+The `basic` backend is explicit and intended for tests or local experiments that inject an `EmbeddingExtractor`.
+
+### VAD Models
+
+VoiceKit supports:
+
+- `none`: no VAD service.
+- `energy`: simple energy detector for tests/basic local filtering.
+- `silero_vad`: Sherpa Silero VAD with `VADModelPath`.
+- `ten_vad`: Sherpa TEN VAD with `VADModelPath`.
+
+Sherpa VAD providers require model files and CGO-enabled Sherpa bindings.
 
 ### Speaker Recognition Models
 Download speaker embedding models from [Sherpa-ONNX Model Zoo](https://github.com/k2-fsa/sherpa-onnx):
@@ -830,9 +1151,12 @@ Download speaker embedding models from [Sherpa-ONNX Model Zoo](https://github.co
 wget https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx
 ```
 
+Speaker embedding extraction creates a new Sherpa stream per extraction. Do not reuse streams after `InputFinished`; VoiceKit deletes them immediately after computing the embedding.
+
 ### Audio Format Support
-- **Input**: WAV, PCM, FLAC, MP3, OGG, M4A (limited compressed format support)
-- **Output**: WAV, PCM (compressed formats are placeholders)
+- **Input**: WAV and PCM
+- **Output**: WAV and PCM
+- **Unsupported**: FLAC, MP3, OGG, M4A, and AAC return explicit errors
 
 ## Testing Strategy
 
@@ -840,11 +1164,21 @@ wget https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition
 - **Isolation**: Each component tested independently with mocked dependencies
 - **Interface Mocking**: Dependency injection enables comprehensive mocking
 - **Table-Driven Tests**: Go's testing framework used extensively for data-driven tests
+- **Native Lifecycle**: ASR and speaker tests use fake native adapters to verify stream reuse, finalization, reset, and close behavior without model files
 
 ### Integration Testing
 - **Component Interaction**: Tests verify correct interaction between audio, speaker, and diarization components
 - **End-to-End Pipelines**: Full voice processing pipelines tested with synthetic data
 - **Performance Benchmarks**: `testing.B` benchmarks for performance regression detection
+
+### Benchmark Workflow
+```bash
+mkdir -p /tmp/voicekit-benchmarks
+go test -bench=. -benchmem -run=^$ -count=6 ./audio ./diarization ./speaker ./indexing ./asr ./meeting ./evaluation . | tee /tmp/voicekit-benchmarks/voicekit-bench.txt
+```
+
+Use `benchstat` for before/after comparisons. Keep model-backed Sherpa RTF
+benchmarks env-gated unless local model paths and audio fixtures are supplied.
 
 ### Test Data Management
 - **Synthetic Audio**: Generated test audio with known characteristics
@@ -864,7 +1198,7 @@ wget https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition
 - **Size Limits**: Configurable limits on audio file sizes and durations
 
 ### Memory Safety
-- **No Unsafe Operations**: Pure Go implementation avoids unsafe pointers
+- **Project-Owned Safety**: Project-owned code avoids unsafe pointer operations; Sherpa integration is isolated behind CGO-backed adapters
 - **Slice Bounds**: All slice operations use safe indexing
 - **Resource Cleanup**: Proper cleanup of external library resources
 
@@ -915,14 +1249,33 @@ voicekit/
 ├── config.go        # Configuration types and validation
 ├── logger.go        # Logging interface and default implementation
 ├── errors.go        # Error types and handling utilities
-├── asr/             # Real-time ASR streaming system
-│   ├── service.go   # ASR orchestration and model management
+├── asr/             # Sherpa ASR online/offline system
+│   ├── service.go   # Streaming ASR orchestration and model management
 │   ├── streaming.go # Session management and streaming state
 │   ├── buffer.go    # Cache-aware audio buffering
-│   ├── vad.go       # Voice activity detection
-│   ├── whisper.go   # Whisper model implementation
-│   ├── *.go         # Additional model implementations
+│   ├── vad.go       # Explicit VAD provider seam
+│   ├── sherpa_online.go # Sherpa online recognizer implementation
+│   ├── sherpa_offline.go # Sherpa offline transcriber implementation
+│   ├── fake_model.go # Explicit fake model for tests/demos
 │   └── *_test.go    # Comprehensive test coverage
+├── tts/             # Sherpa offline text-to-speech system
+│   ├── config.go    # TTS config, defaults, and model-path validation
+│   ├── sherpa_offline.go # Sherpa offline synthesizer implementation
+│   └── *_test.go    # Unit tests with fake native synthesizer
+├── meeting/         # Product-level meeting intelligence artifacts
+│   ├── meeting.go   # Meeting, participant, transcript, summary, and task contracts
+│   ├── from_diarization.go # Mapping from diarized ASR output into meetings
+│   ├── export.go    # Markdown, JSON, SRT, and WebVTT meeting exports
+│   ├── analyzer.go  # Provider-neutral analyzer contract, normalization, and validation
+│   ├── heuristic_analyzer.go # Stdlib-only deterministic reference analyzer
+│   ├── redaction.go # Redaction policy, redactor boundary, and meeting redaction
+│   └── *_test.go    # Artifact validation and mapping tests
+├── evaluation/      # Deterministic meeting quality metrics
+│   ├── evaluation.go # WER/CER, speaker attribution, action item, and RTF metrics
+│   └── *_test.go    # Fixture metric tests
+├── examples/
+│   └── meeting_intelligence/ # Analyze, redact, export, and evaluate flow
+├── MEETING_INTELLIGENCE.md # Meeting intelligence developer guide
 ├── audio/           # Audio processing primitives
 │   ├── resampler.go # Sample rate conversion algorithms
 │   ├── converter.go # Format conversion and I/O
@@ -935,10 +1288,12 @@ voicekit/
 │   ├── parser.go    # Audio parsing utilities
 │   └── types.go     # Speaker domain types and interfaces
 └── diarization/     # Speaker diarization system
-    ├── manager.go   # Diarization orchestration and clustering
+    ├── manager.go   # Diarization backend orchestration
+    ├── sherpa_offline.go # Sherpa offline diarization backend
+    ├── basic_backend.go # Explicit basic clustering backend
     ├── segmenter.go # Audio segmentation algorithms
     ├── integrator.go# ASR integration and result alignment
-    └── types.go     # Diarization domain types
+    └── *_test.go    # Unit and env-gated integration tests
 ```
 
 ### Development Principles
@@ -947,6 +1302,8 @@ voicekit/
 - **Audio Package**: Only audio format conversion and processing
 - **Speaker Package**: Only speaker recognition operations
 - **Diarization Package**: Only speaker diarization and segmentation
+- **Meeting Package**: Only product-level meeting artifacts, deterministic mapping from lower-level voice results, exports, redaction, and analyzer contracts
+- **Evaluation Package**: Only deterministic fixture metrics for product-quality measurement
 - **Main Package**: Only orchestration and API provision
 
 #### Dependency Injection

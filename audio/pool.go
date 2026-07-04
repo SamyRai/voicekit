@@ -83,7 +83,7 @@ func (p *AudioBufferPool) GetStats() map[string]interface{} {
 	// Note: sync.Pool doesn't provide built-in statistics
 	// This is a placeholder for future monitoring integration
 	return map[string]interface{}{
-		"pool_type": "size_classed_audio_buffer",
+		"pool_type":    "size_classed_audio_buffer",
 		"size_classes": []string{"small (<=8KB)", "medium (<=64KB)", "large (>64KB)"},
 	}
 }

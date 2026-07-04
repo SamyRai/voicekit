@@ -73,6 +73,10 @@ func (h *HNSWIndex) Add(ctx context.Context, id string, vector []float32) error 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	if h.index == nil {
+		return fmt.Errorf("index is closed")
+	}
+
 	// Validate vector dimensions
 	if len(vector) != h.config.Dimension {
 		return fmt.Errorf("vector dimension mismatch: expected %d, got %d",
@@ -100,8 +104,15 @@ func (h *HNSWIndex) Remove(ctx context.Context, id string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	if h.index == nil {
+		return fmt.Errorf("index is closed")
+	}
+
 	// Get the integer ID
-	intID := h.mapper.GetIntID(id)
+	intID, exists := h.mapper.LookupIntID(id)
+	if !exists {
+		return nil
+	}
 
 	// Mark as deleted in hnswlib
 	hnswlib.MarkDeleted(h.index, uint64(intID))
@@ -124,19 +135,21 @@ func (h *HNSWIndex) Search(ctx context.Context, query []float32, k int, threshol
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
+	if h.index == nil {
+		return nil, fmt.Errorf("index is closed")
+	}
+
 	// Validate query vector dimensions
 	if len(query) != h.config.Dimension {
 		return nil, fmt.Errorf("query vector dimension mismatch: expected %d, got %d",
 			h.config.Dimension, len(query))
 	}
 
-	// Ensure k is reasonable
-	if k <= 0 {
-		k = 1
+	liveSize := h.mapper.Size()
+	if liveSize == 0 {
+		return nil, nil
 	}
-	if k > 100 { // Limit to prevent excessive memory usage
-		k = 100
-	}
+	k = normalizeSearchLimit(k, liveSize)
 
 	// Prepare result arrays
 	labels := make([]uint64, k)
@@ -159,29 +172,7 @@ func (h *HNSWIndex) Search(ctx context.Context, query []float32, k int, threshol
 			continue // Skip deleted or invalid entries
 		}
 
-		// Calculate similarity based on distance metric
-		var similarity float32
-		switch h.config.DistanceMetric {
-		case Cosine:
-			// Cosine distance to similarity: similarity = 1 - distance
-			similarity = 1.0 - distances[i]
-		case L2:
-			// L2 distance to similarity: use inverse (higher distance = lower similarity)
-			if distances[i] > 0 {
-				similarity = 1.0 / (1.0 + distances[i])
-			}
-		case InnerProduct:
-			// Inner product: already a similarity measure, clamp to [0,1]
-			similarity = distances[i]
-			if similarity < 0 {
-				similarity = 0
-			}
-			if similarity > 1 {
-				similarity = 1
-			}
-		}
-
-		// Only include results above threshold
+		similarity := similarityFromDistance(h.config.DistanceMetric, distances[i])
 		if similarity >= threshold {
 			results = append(results, SearchResult{
 				ID:         stringID,
@@ -194,13 +185,54 @@ func (h *HNSWIndex) Search(ctx context.Context, query []float32, k int, threshol
 	return results, nil
 }
 
+func normalizeSearchLimit(k, liveSize int) int {
+	if k <= 0 {
+		k = 1
+	}
+	if k > liveSize {
+		k = liveSize
+	}
+	if k > 100 {
+		return 100
+	}
+	return k
+}
+
+func similarityFromDistance(metric DistanceMetric, distance float32) float32 {
+	switch metric {
+	case Cosine:
+		return 1.0 - distance
+	case L2:
+		if distance < 0 {
+			return 0
+		}
+		return 1.0 / (1.0 + distance)
+	case InnerProduct:
+		return clampSimilarity(distance)
+	default:
+		return 0
+	}
+}
+
+func clampSimilarity(value float32) float32 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
+}
+
 // Size returns the number of vectors currently in the index
 func (h *HNSWIndex) Size(ctx context.Context) (int, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	size := int(hnswlib.GetCurrentElementCount(h.index))
-	return size, nil
+	if h.index == nil {
+		return 0, fmt.Errorf("index is closed")
+	}
+	return h.mapper.Size(), nil
 }
 
 // Close releases resources used by the index
@@ -215,7 +247,9 @@ func (h *HNSWIndex) Close() error {
 	}
 
 	// Clear the mapper
-	h.mapper.Clear()
+	if h.mapper != nil {
+		h.mapper.Clear()
+	}
 
 	return nil
 }

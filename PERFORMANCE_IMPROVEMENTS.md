@@ -1,24 +1,25 @@
 # VoiceKit Performance Improvements & Optimization Recommendations
 
-**Document Version:** 1.0  
-**Date:** January 2025  
-**Based on:** Research of latest best practices (2024-2025) for audio processing, speaker recognition, diarization, and Go performance optimization
+**Document Version:** 1.1
+**Date:** July 2026
+**Based on:** Research of latest best practices for audio processing, speaker recognition, diarization, Sherpa-ONNX, and Go 1.26.4 performance behavior
 
 ---
 
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
-2. [Audio Processing Optimizations](#audio-processing-optimizations)
-3. [Speaker Recognition Optimizations](#speaker-recognition-optimizations)
-4. [Diarization Algorithm Improvements](#diarization-algorithm-improvements)
-5. [Memory Management & GC Optimization](#memory-management--gc-optimization)
-6. [Concurrency & Locking Improvements](#concurrency--locking-improvements)
-7. [Database & Storage Optimizations](#database--storage-optimizations)
-8. [Sherpa-ONNX Integration Improvements](#sherpa-onnx-integration-improvements)
-9. [Real-Time Streaming Optimizations](#real-time-streaming-optimizations)
-10. [Code Quality & Architecture Improvements](#code-quality--architecture-improvements)
-11. [Implementation Priority & Roadmap](#implementation-priority--roadmap)
+2. [Measured July 2026 Performance Sprint](#measured-july-2026-performance-sprint)
+3. [Audio Processing Optimizations](#audio-processing-optimizations)
+4. [Speaker Recognition Optimizations](#speaker-recognition-optimizations)
+5. [Diarization Algorithm Improvements](#diarization-algorithm-improvements)
+6. [Memory Management & GC Optimization](#memory-management--gc-optimization)
+7. [Concurrency & Locking Improvements](#concurrency--locking-improvements)
+8. [Database & Storage Optimizations](#database--storage-optimizations)
+9. [Sherpa-ONNX Integration Improvements](#sherpa-onnx-integration-improvements)
+10. [Real-Time Streaming Optimizations](#real-time-streaming-optimizations)
+11. [Code Quality & Architecture Improvements](#code-quality--architecture-improvements)
+12. [Implementation Priority & Roadmap](#implementation-priority--roadmap)
 
 ---
 
@@ -37,6 +38,123 @@ This document provides comprehensive recommendations for improving VoiceKit's pe
 - **Diarization**: 20-30% DER improvement with modern clustering algorithms
 - **Memory**: 50-85% reduction in GC pressure with proper pooling
 - **Database**: 2-5× faster writes with modern embedded databases
+
+---
+
+## Measured July 2026 Performance Sprint
+
+**Environment:** Go 1.26.4, darwin/arm64, Apple M2, local CPU benchmarks. No
+model files, hosted providers, new production dependencies, secrets, auth
+settings, or production data were used.
+
+The July 2026 performance sprint focused on local SDK overhead before native
+model RTF work. The high-confidence hot paths were WAV/PCM conversion and the
+basic diarization fallback. Sherpa-backed runtime performance remains
+env-gated because model paths are not committed.
+
+### Benchmark Workflow
+
+Benchmark artifacts should be written outside tracked source by default:
+
+```bash
+mkdir -p /tmp/voicekit-benchmarks
+
+go test -bench='Benchmark(AudioProcessingPipeline|AudioSegmentation|DiarizationPipeline|Clustering|Clustering_50|Clustering_100)$' \
+  -benchmem -run=^$ -count=6 ./audio ./diarization \
+  | tee /tmp/voicekit-benchmarks/voicekit-perf-before.txt
+
+go test -bench='Benchmark(AudioProcessingPipeline|AudioSegmentation|DiarizationPipeline|Clustering|Clustering_50|Clustering_100)$' \
+  -benchmem -run=^$ -count=6 ./audio ./diarization \
+  | tee /tmp/voicekit-benchmarks/voicekit-perf-after.txt
+
+benchstat /tmp/voicekit-benchmarks/voicekit-perf-before.txt \
+  /tmp/voicekit-benchmarks/voicekit-perf-after.txt
+```
+
+Broader benchmark sweep:
+
+```bash
+go test -bench=. -benchmem -run=^$ -count=6 \
+  ./audio ./diarization ./speaker ./indexing ./asr ./meeting ./evaluation .
+```
+
+### July 2026 Results
+
+The sprint exceeded the allocation targets without changing public APIs.
+
+| Benchmark | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| `BenchmarkAudioProcessingPipeline` time | 90.734 us/op | 9.461 us/op | -89.57% |
+| `BenchmarkAudioProcessingPipeline` memory | 328.60 KiB/op | 64.58 KiB/op | -80.35% |
+| `BenchmarkAudioSegmentation` time | 117.39 us/op | 69.36 us/op | -40.91% |
+| `BenchmarkAudioSegmentation` memory | 984.5 KiB/op | 192.1 KiB/op | -80.49% |
+| `BenchmarkDiarizationPipeline` time | 124.47 us/op | 53.31 us/op | -57.17% |
+| `BenchmarkDiarizationPipeline` memory | 417.41 KiB/op | 83.72 KiB/op | -79.94% |
+| `BenchmarkClustering_50` time | 242.49 us/op | 14.80 us/op | -93.90% |
+| `BenchmarkClustering_50` memory | 10,656 B/op | 416 B/op | -96.10% |
+
+Implementation notes:
+
+- `audio.(*Converter).decodeWAV` and `ParseWAVFile` now use `go-audio/wav` for
+  RIFF/header validation but decode PCM chunks directly into a preallocated
+  `[]float32`.
+- Raw PCM encode/decode uses direct little-endian indexing instead of
+  per-sample `binary.Read`, `binary.Write`, or temporary 24-bit buffers.
+- Basic silence segmentation collects speech sample ranges first and
+  materializes final `AudioSegment.Samples` once per segment.
+- The small clustering path now uses the direct union-find path because the
+  precomputed similarity matrix was slower and allocated more for current
+  benchmark sizes.
+- Root fake benchmarks were removed or fixed; meeting/evaluation benchmarks now
+  cover `meeting.FromIntegratedResult`, `Meeting.Analyze` with
+  `HeuristicAnalyzer`, `Meeting.Redact`, all export formats, and
+  `evaluation.EvaluateMeeting`.
+
+Historical note: tracked files under `benchmarks/` contain January 2026 Go 1.25
+measurements and should be treated as historical comparison material only. New
+decisions should use Go 1.26.4 benchmark output generated from the workflow
+above.
+
+Dependency note: `go-audio-resampler` and `encoding/json/v2` were not adopted.
+Candidate libraries should stay behind scratch benchmarks and dependency review
+until they show a measured hot-path payoff and receive explicit approval.
+
+### Sprint Learnings for the Next Developer
+
+Use these notes before starting the next performance slice:
+
+- Read dependency source around the suspected hot path. In this sprint,
+  `go-audio/wav.FullPCMBuffer` was the allocation source, not VoiceKit's header
+  validation. Keeping `go-audio/wav` for RIFF parsing while bypassing
+  `FullPCMBuffer` produced the win without weakening format correctness.
+- Prefer one final owned allocation over pool-plus-copy when returning data to
+  callers. Pools are still useful for temporary chunk buffers and internal
+  scratch space, but returned `[]byte` or `[]float32` values usually need stable
+  caller ownership.
+- Segmenting by appending samples during detection creates hidden allocation
+  pressure. Collect timing/sample ranges first, then copy the final payload once
+  after the segment is known.
+- Preserve quality semantics explicitly. The optimized diarization path keeps
+  the old "speech samples only" behavior by storing speech ranges instead of
+  widening each segment to include silent gaps.
+- Do not assume precomputation is faster. The small clustering similarity matrix
+  was both slower and more memory-heavy than direct pairwise similarity at the
+  current segment counts.
+- Audit benchmarks for impossible results before acting on them. Sub-nanosecond
+  or zero-work benchmarks must be replaced with real public operations or
+  guarded with sinks/escapes that prevent compiler elimination.
+- Keep model-backed claims separate from deterministic SDK overhead. Sherpa RTF,
+  DER, and accuracy comparisons require explicit local model paths and fixture
+  audio; they are not proven by unit tests or synthetic benchmarks alone.
+
+Measured follow-up candidates:
+
+- `BenchmarkMeetingExports/Markdown` now has a baseline and allocates
+  significantly more than caption exports. Optimize only if meeting export
+  volume makes it a real hot path.
+- `BenchmarkEvaluateMeeting` is intentionally deterministic but relatively
+  expensive because edit-distance work scales with transcript length. Optimize
+  after larger fixture coverage defines realistic meeting sizes.
 
 ---
 
@@ -328,8 +446,9 @@ type EmbeddingCache struct {
 
 ### 1. Modern Clustering Algorithms
 
-**Current State:** Simple agglomerative hierarchical clustering  
-**Recommendation:** Implement state-of-the-art clustering methods
+**Current State:** Production diarization now routes through Sherpa offline diarization. The old silence-plus-embedding clustering implementation remains only as an explicit `basic` backend for tests and local experiments.
+
+**Recommendation:** Benchmark Sherpa segmentation/embedding model combinations before adding another clustering implementation.
 
 **Option 1: VBx (Variational Bayesian HMM Clustering)**
 - Better DER (Diarization Error Rate) than AHC
@@ -354,9 +473,9 @@ type EmbeddingCache struct {
 - **Expected improvement:** 10-15% DER reduction, better efficiency
 
 **Implementation Priority:**
-1. Start with VBx (most mature, good balance)
-2. Add overlap detection
-3. Consider E-SHARC for overlap-heavy scenarios
+1. Measure Sherpa offline diarization throughput and DER on target audio.
+2. Tune `ClusteringThreshold`, `NumClusters`, `MinDurationOn`, and `MinDurationOff`.
+3. Consider VBx or overlap handling only if Sherpa-backed results show a concrete gap.
 
 ---
 
@@ -1218,47 +1337,76 @@ func BenchmarkSpeakerSearch_10000(b *testing.B) {
 
 ### 1. Real-Time Streaming Architecture
 
-**Current State:** Implemented real-time streaming ASR with <500ms end-to-end latency
+**Current State:** Sherpa offline ASR is implemented as `types.Transcriber`, and Sherpa online ASR remains available as the streaming `ASRService`. Streaming now keeps a native Sherpa online stream per VoiceKit session and calls `InputFinished` only during endpoint/finalization cleanup. Latency depends on the configured Sherpa model, runtime provider, hardware, and chunking strategy.
 
-**Performance Characteristics (2026 benchmarks):**
-- **Latency**: ~501ms per 1-second audio chunk (Apple M2)
-- **Memory**: ~100KB per operation, 14 allocations
-- **Throughput**: Support for 10+ concurrent streaming sessions
-- **Architecture**: Cache-aware processing with audio buffer pooling
+**Current Characteristics:**
+- **Runtime**: Sherpa ONNX offline and online recognizers through CGO bindings
+- **Default state**: ASR disabled unless backend-specific model paths are configured
+- **Architecture**: Offline transcription via `Transcriber`; streaming via cache-aware session buffering and explicit model registry
+- **Lifecycle**: Session-owned native streams are closed on finalization, explicit removal, timeout cleanup, and service close
+- **VAD**: Explicit `none`, `energy`, Sherpa Silero, and Sherpa TEN providers
 
 **Key Optimizations:**
 - **Streaming Session Management**: Efficient state management for multiple concurrent streams
 - **Audio Buffer Pooling**: Zero-allocation audio buffering with sync.Pool
-- **VAD Integration**: Voice activity detection for intelligent processing
+- **VAD Integration**: Provider seam for energy and Sherpa-backed VAD
 - **Model Selection**: Dynamic model selection based on language and requirements
 
 ### 2. Model Performance Comparison
 
-**Implemented Models:**
-- **Whisper Large-v3**: 99+ languages, high accuracy, ~500ms latency
-- **Nemotron Speech ASR**: Ultra-low latency (80-160ms), English-focused
-- **Parakeet TDT**: High throughput, multilingual support
-- **Moonshine**: Edge-friendly, CPU-optimized
+**Implemented Runtime:**
+- **Sherpa Online Transducer**: `tokens.txt`, encoder, decoder, and joiner paths
+- **Sherpa Online CTC**: `tokens.txt`, single model path, and model type (`zipformer2_ctc`, `nemo_ctc`, or `tone_ctc`)
+- **Sherpa Offline**: transducer, Paraformer, Zipformer CTC, NeMo CTC, SenseVoice, and Whisper config families
+- **Fake Model**: Explicit test/demo fake only; never registered by default
 
-**Performance Targets:**
-- **English Streaming**: <200ms first token, <500ms end-to-end
-- **Multilingual**: <500ms first token, <1s end-to-end
-- **Concurrent Streams**: 10-1000 depending on hardware
-- **Memory Efficiency**: <100KB per operation
+**Performance Work Still Needed:**
+- Benchmark real Sherpa models on target CPU/GPU/CoreML providers
+- Measure first-token and chunk latency per model family
+- Add model-specific throughput tests and realistic audio fixtures
+- Define an accuracy benchmark before publishing WER claims
+- Keep `DecodeStreams` and recognizer pools out of production paths until benchmarks prove they improve throughput without lifecycle regressions
 
-### 3. Production Optimizations
+## TTS Synthesis Optimizations
 
-**Scalability Features:**
+### 1. Offline Synthesis Architecture
+
+**Current State:** Sherpa offline TTS is implemented as `types.SpeechSynthesizer` through `tts.SherpaOfflineSynthesizer`. TTS is disabled by default and only initializes when a family-specific model config is provided.
+
+**Current Characteristics:**
+- **Runtime**: Sherpa ONNX offline TTS through CGO bindings
+- **Default state**: TTS disabled unless required model paths and data directories are configured
+- **Architecture**: Family-specific config blocks for VITS, Matcha, Kokoro, KittenTTS, ZipVoice, Pocket, and Supertonic
+- **Output**: Normalized float32 PCM samples plus sample rate and duration metadata
+
+**Performance Work Still Needed:**
+- Benchmark synthesis latency by model family, speaker ID, provider, and text length
+- Measure memory pressure for longer text inputs and multi-sentence generation
+- Decide whether WAV encoding belongs in VoiceKit or in caller-owned application code
+- Add real-model integration tests when local TTS model paths are available
+
+### 3. Runtime Optimizations
+
+**Scalability Features To Harden:**
 - **Session Management**: Automatic cleanup of idle/expired sessions
-- **Resource Pooling**: Shared VAD instances and model caches
-- **Load Balancing**: Ready for Kubernetes GPU scheduling
-- **Monitoring**: Integrated metrics and health checks
+- **Resource Pooling**: Evaluate shared VAD/model pools after native model benchmarks; speaker embedding streams remain single-use after `InputFinished`
+- **Load Balancing**: Out of scope for this library; belongs in service integration
+- **Monitoring**: Metrics interfaces exist but need production collector wiring
 
 **Expected Impact:**
-- **Latency**: Sub-500ms real-time transcription
-- **Scalability**: 1000+ concurrent streams on GPU infrastructure
-- **Accuracy**: 95%+ WER for supported languages
-- **Reliability**: 99.9% uptime with graceful degradation
+- **Latency**: Measurable real-time transcription once models and hardware are fixed
+- **Scalability**: Bounded by native model memory, provider, and stream concurrency
+- **Accuracy**: Must be benchmarked per model and language
+- **Reliability**: Requires integration-level lifecycle, monitoring, and deployment work
+
+### 4. Go 1.26.4 Runtime Baseline
+
+VoiceKit now targets Go 1.26.4. Go 1.26's runtime improvements are relevant to this codebase because Sherpa-backed paths use CGO and the audio/speaker/indexing paths allocate heavily enough for GC behavior to matter.
+
+**Measurement Policy:**
+- Treat Go 1.26.4 as the baseline for new benchmark reports.
+- Do not rewrite benchmark expectations from old Go 1.25 results without rerunning them.
+- Keep model-backed benchmark claims gated on explicit local model/audio assets.
 
 ---
 
@@ -1266,8 +1414,8 @@ func BenchmarkSpeakerSearch_10000(b *testing.B) {
 
 This document provides a comprehensive roadmap for optimizing VoiceKit. The recommendations are based on:
 
-1. **Latest research** (2024-2025) in audio processing, speaker recognition, and diarization
-2. **Production best practices** for Go performance optimization
+1. **Latest checked research** for audio processing, speaker recognition, diarization, and Sherpa-backed voice inference
+2. **Production best practices** for Go 1.26.4 performance optimization
 3. **Modern database solutions** for embedding storage
 4. **Real-world performance data** from similar systems
 

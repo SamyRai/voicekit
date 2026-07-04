@@ -86,11 +86,6 @@ func DefaultM4AConfig() *AudioConfig {
 func SupportedFormats() []AudioFormat {
 	return []AudioFormat{
 		FormatWAV,
-		FormatFLAC,
-		FormatMP3,
-		FormatOGG,
-		FormatM4A,
-		FormatAAC,
 		FormatPCM,
 	}
 }

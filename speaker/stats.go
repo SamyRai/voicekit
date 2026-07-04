@@ -30,17 +30,17 @@ func (m *Manager) GetDatabaseStats() *DatabaseStats {
 func (m *Manager) GetStats() map[string]interface{} {
 	stats := m.GetDatabaseStats()
 	return map[string]interface{}{
-		"speaker_count":       stats.TotalSpeakers,
-		"total_samples":       stats.TotalSamples,
-		"embedding_dim":       stats.EmbeddingDim,
-		"threshold":           stats.Threshold,
-		"version":             stats.Version,
-		"last_updated":        stats.UpdatedAt.Format(time.RFC3339),
-		"identify_requests":   atomic.LoadInt64(&m.identifyRequests),
-		"identify_successes":  atomic.LoadInt64(&m.identifySuccesses),
-		"verify_requests":     atomic.LoadInt64(&m.verifyRequests),
-		"verify_successes":    atomic.LoadInt64(&m.verifySuccesses),
-		"registration_count":  atomic.LoadInt64(&m.registrationCount),
-		"error_count":         atomic.LoadInt64(&m.errorCount),
+		"speaker_count":      stats.TotalSpeakers,
+		"total_samples":      stats.TotalSamples,
+		"embedding_dim":      stats.EmbeddingDim,
+		"threshold":          stats.Threshold,
+		"version":            stats.Version,
+		"last_updated":       stats.UpdatedAt.Format(time.RFC3339),
+		"identify_requests":  atomic.LoadInt64(&m.identifyRequests),
+		"identify_successes": atomic.LoadInt64(&m.identifySuccesses),
+		"verify_requests":    atomic.LoadInt64(&m.verifyRequests),
+		"verify_successes":   atomic.LoadInt64(&m.verifySuccesses),
+		"registration_count": atomic.LoadInt64(&m.registrationCount),
+		"error_count":        atomic.LoadInt64(&m.errorCount),
 	}
 }

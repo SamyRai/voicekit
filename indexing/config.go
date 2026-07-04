@@ -29,7 +29,7 @@ type Config struct {
 // DefaultConfig returns a default configuration for typical embedding use cases
 func DefaultConfig() *Config {
 	return &Config{
-		Dimension:      192,  // Common for many speaker models
+		Dimension:      192,   // Common for many speaker models
 		MaxElements:    10000, // Start with reasonable capacity
 		M:              16,    // Good balance between memory and accuracy
 		EfConstruction: 200,   // Higher for better index quality

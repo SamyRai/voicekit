@@ -34,10 +34,10 @@ type Manager struct {
 	managementUseCase  *application.SpeakerManagementUseCase
 
 	// Legacy infrastructure (for backward compatibility)
-	extractor    SpeakerEmbeddingExtractor
-	manager      SpeakerEmbeddingManager
-	database     SpeakerDatabase
-	vectorIndex  domain.VectorIndex // Generic vector index for fast ANN search
+	extractor   SpeakerEmbeddingExtractor
+	manager     SpeakerEmbeddingManager
+	database    SpeakerDatabase
+	vectorIndex domain.VectorIndex // Generic vector index for fast ANN search
 
 	// Configuration
 	threshold    float32
@@ -49,12 +49,12 @@ type Manager struct {
 	scratchEmbedding []float32 // Reused for embedding calculations
 
 	// Atomic counters for statistics (lock-free)
-	identifyRequests   int64 // Total identification requests
-	identifySuccesses  int64 // Successful identifications
-	verifyRequests     int64 // Total verification requests
-	verifySuccesses    int64 // Successful verifications
-	registrationCount  int64 // Total speaker registrations
-	errorCount         int64 // Total errors
+	identifyRequests  int64 // Total identification requests
+	identifySuccesses int64 // Successful identifications
+	verifyRequests    int64 // Total verification requests
+	verifySuccesses   int64 // Successful verifications
+	registrationCount int64 // Total speaker registrations
+	errorCount        int64 // Total errors
 
 	// Mutex for legacy operations
 	mutex sync.RWMutex

@@ -120,8 +120,8 @@ func BenchmarkConvertChannels(b *testing.B) {
 	// Generate stereo sine waves
 	for i := 0; i < numSamples; i++ {
 		t := float64(i) / 44100.0
-		left := math.Sin(2 * math.Pi * 1000 * t)      // 1kHz left
-		right := math.Sin(2 * math.Pi * 1200 * t)     // 1.2kHz right
+		left := math.Sin(2 * math.Pi * 1000 * t)  // 1kHz left
+		right := math.Sin(2 * math.Pi * 1200 * t) // 1.2kHz right
 		audioData[i*2] = float32(left)
 		audioData[i*2+1] = float32(right)
 	}

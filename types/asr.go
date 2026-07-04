@@ -34,12 +34,20 @@ type ASRModel interface {
 	Close() error
 }
 
+// Transcriber defines batch/offline transcription over complete audio inputs.
+type Transcriber interface {
+	Transcribe(ctx context.Context, audio []float32, sampleRate int) (*Transcription, error)
+	Close() error
+}
+
 // Transcription represents a transcription result
 type Transcription struct {
 	Text       string        `json:"text"`
 	IsPartial  bool          `json:"is_partial"`
 	Confidence float64       `json:"confidence"`
 	Language   string        `json:"language"`
+	Emotion    string        `json:"emotion,omitempty"`
+	Event      string        `json:"event,omitempty"`
 	Timestamp  time.Time     `json:"timestamp"`
 	Words      []Word        `json:"words,omitempty"`
 	StartTime  time.Duration `json:"start_time,omitempty"`
@@ -108,8 +116,8 @@ type VADConfig struct {
 
 // VADResult represents VAD processing result
 type VADResult struct {
-	IsSpeech  bool
+	IsSpeech   bool
 	IsEndpoint bool
 	Confidence float64
-	State     interface{}
+	State      interface{}
 }

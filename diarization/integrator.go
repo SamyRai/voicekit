@@ -36,54 +36,45 @@ type IntegratedResult struct {
 
 // SpeakerTextSegment represents a segment of text attributed to a specific speaker
 type SpeakerTextSegment struct {
-	SpeakerID  string                 `json:"speaker_id"`
-	StartTime  float64                `json:"start_time"`
-	EndTime    float64                `json:"end_time"`
-	Duration   float64                `json:"duration"`
-	Text       string                 `json:"text"`
-	Confidence float32                `json:"confidence"`
-	Words      []recognitionWordInfo `json:"words,omitempty"`
+	SpeakerID  string                `json:"speaker_id"`
+	StartTime  float64               `json:"start_time"`
+	EndTime    float64               `json:"end_time"`
+	Duration   float64               `json:"duration"`
+	Text       string                `json:"text"`
+	Confidence float32               `json:"confidence"`
+	Words      []RecognitionWordInfo `json:"words,omitempty"`
 }
 
-// recognitionWordInfo represents word-level information from ASR
-type recognitionWordInfo struct {
+// RecognitionWordInfo represents word-level information from ASR.
+type RecognitionWordInfo struct {
 	Text       string  `json:"text"`
 	StartTime  float64 `json:"start_time"`
 	EndTime    float64 `json:"end_time"`
 	Confidence float32 `json:"confidence"`
 }
 
-// RecognitionResult represents ASR recognition result
-// This is a local type for diarization integration
-type recognitionResult struct {
-	SessionID     string               `json:"session_id"`
-	Text          string               `json:"text"`
-	Language      string               `json:"language,omitempty"`
-	LanguageProb  float32              `json:"language_prob,omitempty"`
-	Confidence    float32              `json:"confidence"`
-	Words         []recognitionWordInfo `json:"words,omitempty"`
-	Timestamp     time.Time            `json:"timestamp"`
-	Duration      float64              `json:"duration"`
-	ProcessingTime time.Duration       `json:"processing_time"`
-	Translations  map[string]string    `json:"translations,omitempty"`
+// RecognitionResult represents typed ASR recognition data for diarization integration.
+type RecognitionResult struct {
+	SessionID      string                `json:"session_id"`
+	Text           string                `json:"text"`
+	Language       string                `json:"language,omitempty"`
+	LanguageProb   float32               `json:"language_prob,omitempty"`
+	Confidence     float32               `json:"confidence"`
+	Words          []RecognitionWordInfo `json:"words,omitempty"`
+	Timestamp      time.Time             `json:"timestamp"`
+	Duration       float64               `json:"duration"`
+	ProcessingTime time.Duration         `json:"processing_time"`
+	Translations   map[string]string     `json:"translations,omitempty"`
 }
 
-// IntegrateWithRecognition integrates diarization results with recognition results
-func (i *Integrator) IntegrateWithRecognition(
-	recognitionData interface{}, // Accept any recognition result type
+type recognitionResult = RecognitionResult
+type recognitionWordInfo = RecognitionWordInfo
+
+// IntegrateRecognition integrates typed recognition results with diarization results.
+func (i *Integrator) IntegrateRecognition(
+	result RecognitionResult,
 	diarizationResult *DiarizationResult,
 ) (*IntegratedResult, error) {
-
-	// Type assert to access fields - this is a simplified implementation
-	// In production, you might want more robust type handling
-	result := &recognitionResult{
-		SessionID:  getStringField(recognitionData, "SessionID"),
-		Text:       getStringField(recognitionData, "Text"),
-		Language:   getStringField(recognitionData, "Language"),
-		Confidence: getFloat32Field(recognitionData, "Confidence"),
-		Words:      getWordsField(recognitionData, "Words"),
-	}
-
 	integrated := &IntegratedResult{
 		SessionID:         result.SessionID,
 		FullText:          result.Text,
@@ -102,7 +93,7 @@ func (i *Integrator) IntegrateWithRecognition(
 	}
 
 	// Align recognition text with speaker segments
-	speakerSegments, err := i.alignTextWithSpeakers(result, diarizationResult)
+	speakerSegments, err := i.alignTextWithSpeakers(&result, diarizationResult)
 	if err != nil {
 		return nil, fmt.Errorf("failed to align text with speakers: %v", err)
 	}
@@ -138,18 +129,9 @@ func (i *Integrator) alignTextWithSpeakers(
 
 // alignWithWordTimestamps aligns using word-level timestamps
 func (i *Integrator) alignWithWordTimestamps(
-	recognitionData interface{},
+	result *recognitionResult,
 	diarizationResult *DiarizationResult,
 ) []SpeakerTextSegment {
-
-	result := &recognitionResult{
-		SessionID:  getStringField(recognitionData, "SessionID"),
-		Text:       getStringField(recognitionData, "Text"),
-		Language:   getStringField(recognitionData, "Language"),
-		Confidence: getFloat32Field(recognitionData, "Confidence"),
-		Words:      getWordsField(recognitionData, "Words"),
-	}
-
 	segments := []SpeakerTextSegment{}
 
 	for _, speakerSegment := range diarizationResult.Segments {
@@ -194,18 +176,9 @@ func (i *Integrator) alignWithWordTimestamps(
 
 // alignWithTimeProportions aligns using time proportions when word timestamps aren't available
 func (i *Integrator) alignWithTimeProportions(
-	recognitionData interface{},
+	result *recognitionResult,
 	diarizationResult *DiarizationResult,
 ) []SpeakerTextSegment {
-
-	result := &recognitionResult{
-		SessionID:  getStringField(recognitionData, "SessionID"),
-		Text:       getStringField(recognitionData, "Text"),
-		Language:   getStringField(recognitionData, "Language"),
-		Confidence: getFloat32Field(recognitionData, "Confidence"),
-		Words:      getWordsField(recognitionData, "Words"),
-	}
-
 	segments := []SpeakerTextSegment{}
 	words := result.Words
 
@@ -373,26 +346,4 @@ func (i *Integrator) ExportToWebSocketMessage(result *IntegratedResult) map[stri
 	}
 
 	return message
-}
-
-// Helper functions for reflection-based field access
-func getStringField(obj interface{}, fieldName string) string {
-	// Simplified implementation - in production use reflection properly
-	if str, ok := obj.(string); ok {
-		return str
-	}
-	return ""
-}
-
-func getFloat32Field(obj interface{}, fieldName string) float32 {
-	// Simplified implementation - in production use reflection properly
-	if f, ok := obj.(float32); ok {
-		return f
-	}
-	return 0.0
-}
-
-func getWordsField(obj interface{}, fieldName string) []recognitionWordInfo {
-	// Simplified implementation - in production use reflection properly
-	return nil
 }
