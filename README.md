@@ -1171,14 +1171,34 @@ Speaker embedding extraction creates a new Sherpa stream per extraction. Do not 
 - **End-to-End Pipelines**: Full voice processing pipelines tested with synthetic data
 - **Performance Benchmarks**: `testing.B` benchmarks for performance regression detection
 
+### Local Verification and CI
+Run the same gate locally that CI runs:
+
+```bash
+make verify
+```
+
+`make verify` checks forbidden tracked artifacts, verifies modules, checks
+`gofmt`, verifies `go mod tidy`, runs `golangci-lint`, `go vet ./...`,
+`go test ./...`, and `go test -race ./...` when the local platform supports
+the race detector. The CI workflow in `.github/workflows/ci.yml` uses
+`actions/setup-go` with `go-version-file: go.mod` and delegates to
+`make verify`, so local and remote gates stay aligned.
+
+The forbidden-file check rejects committed local environment files, model
+artifacts, runtime profiles, and generated benchmark directories. Model files
+remain caller/deployment owned and are intentionally not committed.
+
 ### Benchmark Workflow
 ```bash
-mkdir -p /tmp/voicekit-benchmarks
-go test -bench=. -benchmem -run=^$ -count=6 ./audio ./diarization ./speaker ./indexing ./asr ./meeting ./evaluation . | tee /tmp/voicekit-benchmarks/voicekit-bench.txt
+make bench-all
+make bench-compare BEFORE=/tmp/voicekit-benchmarks/before.txt AFTER=/tmp/voicekit-benchmarks/after.txt
 ```
 
 Use `benchstat` for before/after comparisons. Keep model-backed Sherpa RTF
 benchmarks env-gated unless local model paths and audio fixtures are supplied.
+Raw benchmark and profile artifacts go under `/tmp/voicekit-benchmarks` and
+`/tmp/voicekit-profiles` by default, not tracked source directories.
 
 ### Test Data Management
 - **Synthetic Audio**: Generated test audio with known characteristics
@@ -1283,7 +1303,7 @@ voicekit/
 │   └── types.go     # Audio-specific type definitions
 ├── speaker/         # Speaker recognition system
 │   ├── manager.go   # Core speaker operations (register/identify/verify)
-│   ├── embedding.go # Neural network integration and similarity computation
+│   ├── embedding_adapter.go # Neural network adapter integration
 │   ├── database.go  # Persistence layer and caching
 │   ├── parser.go    # Audio parsing utilities
 │   └── types.go     # Speaker domain types and interfaces
@@ -1340,6 +1360,8 @@ voicekit/
 - **Integration Tests**: Component interaction tested
 - **Benchmark Tests**: Performance-critical code benchmarked
 - **Edge Cases**: Error conditions and boundary cases tested
+- **CI Parity**: Keep `make verify` as the single local and CI entrypoint for
+  formatting, lint, vet, tests, race checks, and repository hygiene
 
 ### Performance Considerations
 

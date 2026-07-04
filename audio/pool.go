@@ -17,19 +17,22 @@ func NewAudioBufferPool() *AudioBufferPool {
 		small: sync.Pool{
 			New: func() interface{} {
 				// Default to 2048 float32 values (8KB)
-				return make([]float32, 0, 2048)
+				buf := make([]float32, 0, 2048)
+				return &buf
 			},
 		},
 		medium: sync.Pool{
 			New: func() interface{} {
 				// Default to 16384 float32 values (64KB)
-				return make([]float32, 0, 16384)
+				buf := make([]float32, 0, 16384)
+				return &buf
 			},
 		},
 		large: sync.Pool{
 			New: func() interface{} {
 				// Default to 131072 float32 values (512KB)
-				return make([]float32, 0, 131072)
+				buf := make([]float32, 0, 131072)
+				return &buf
 			},
 		},
 	}
@@ -52,7 +55,8 @@ func (p *AudioBufferPool) Get(size int) []float32 {
 		return make([]float32, size)
 	}
 
-	slice := buf.([]float32)
+	slicePtr := buf.(*[]float32)
+	slice := *slicePtr
 	if cap(slice) < size {
 		return make([]float32, size)
 	}
@@ -75,7 +79,7 @@ func (p *AudioBufferPool) Put(buf []float32) {
 		pool = &p.large
 	}
 
-	pool.Put(buf)
+	pool.Put(&buf)
 }
 
 // GetStats returns statistics about pool usage (for monitoring)
@@ -98,7 +102,8 @@ func NewFloat32BufferPool(defaultCapacity int) *Float32BufferPool {
 	return &Float32BufferPool{
 		pool: sync.Pool{
 			New: func() interface{} {
-				return make([]float32, 0, defaultCapacity)
+				buf := make([]float32, 0, defaultCapacity)
+				return &buf
 			},
 		},
 	}
@@ -111,7 +116,8 @@ func (p *Float32BufferPool) Get(size int) []float32 {
 		return make([]float32, size)
 	}
 
-	slice := buf.([]float32)
+	slicePtr := buf.(*[]float32)
+	slice := *slicePtr
 	if cap(slice) < size {
 		return make([]float32, size)
 	}
@@ -122,7 +128,7 @@ func (p *Float32BufferPool) Get(size int) []float32 {
 // Put returns a float32 slice to the pool
 func (p *Float32BufferPool) Put(buf []float32) {
 	buf = buf[:0] // Reset length, keep capacity
-	p.pool.Put(buf)
+	p.pool.Put(&buf)
 }
 
 // Int16BufferPool provides pooling for int16 slices (commonly used in audio)
@@ -135,7 +141,8 @@ func NewInt16BufferPool(defaultCapacity int) *Int16BufferPool {
 	return &Int16BufferPool{
 		pool: sync.Pool{
 			New: func() interface{} {
-				return make([]int16, 0, defaultCapacity)
+				buf := make([]int16, 0, defaultCapacity)
+				return &buf
 			},
 		},
 	}
@@ -148,7 +155,8 @@ func (p *Int16BufferPool) Get(size int) []int16 {
 		return make([]int16, size)
 	}
 
-	slice := buf.([]int16)
+	slicePtr := buf.(*[]int16)
+	slice := *slicePtr
 	if cap(slice) < size {
 		return make([]int16, size)
 	}
@@ -159,7 +167,7 @@ func (p *Int16BufferPool) Get(size int) []int16 {
 // Put returns an int16 slice to the pool
 func (p *Int16BufferPool) Put(buf []int16) {
 	buf = buf[:0] // Reset length, keep capacity
-	p.pool.Put(buf)
+	p.pool.Put(&buf)
 }
 
 // ByteBufferPool provides pooling for byte slices
@@ -172,7 +180,8 @@ func NewByteBufferPool(defaultCapacity int) *ByteBufferPool {
 	return &ByteBufferPool{
 		pool: sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 0, defaultCapacity)
+				buf := make([]byte, 0, defaultCapacity)
+				return &buf
 			},
 		},
 	}
@@ -185,7 +194,8 @@ func (p *ByteBufferPool) Get(size int) []byte {
 		return make([]byte, size)
 	}
 
-	slice := buf.([]byte)
+	slicePtr := buf.(*[]byte)
+	slice := *slicePtr
 	if cap(slice) < size {
 		return make([]byte, size)
 	}
@@ -196,7 +206,7 @@ func (p *ByteBufferPool) Get(size int) []byte {
 // Put returns a byte slice to the pool
 func (p *ByteBufferPool) Put(buf []byte) {
 	buf = buf[:0] // Reset length, keep capacity
-	p.pool.Put(buf)
+	p.pool.Put(&buf)
 }
 
 // Global pools for common use cases

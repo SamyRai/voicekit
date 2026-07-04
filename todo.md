@@ -141,3 +141,24 @@
 - [x] Run `go vet ./...`.
 - [x] Run `go test -race ./...`.
 - [x] Run `git diff --check`.
+
+## Repository Hygiene and CI Sprint
+
+- [x] Inspect local common workflow repo and sibling Go CI/lint conventions.
+- [x] Check current official docs for Go setup caching, Gitea Actions
+  compatibility, and golangci-lint v2 config shape.
+- [x] Add `.gitignore` for local env files, generated benchmark/profile output,
+  local model/runtime assets, and accidental root binaries.
+- [x] Remove tracked generated benchmark artifacts and the stray `final-test`
+  Go archive from source control.
+- [x] Add `scripts/check-forbidden-files.sh` and wire it into `make verify`.
+- [x] Add `.golangci.yml` with the standard correctness gate plus misspell and
+  unconvert checks.
+- [x] Add `.github/workflows/ci.yml` that sets up Go from `go.mod` and runs
+  `make verify`.
+- [x] Update `Makefile` with local/CI verification targets and benchmark output
+  paths under `/tmp/voicekit-benchmarks` and `/tmp/voicekit-profiles`.
+- [x] Fix production lint findings for sync.Pool slice storage, dead speaker
+  benchmark/code, cleanup error handling, and standard staticcheck messages.
+- [x] Update README, performance notes, product roadmap, and todo with the
+  shipped repo maintenance behavior.

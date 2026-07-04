@@ -3,6 +3,7 @@ package speaker
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -34,8 +35,14 @@ func NewShardedSpeakerDatabase(dataDir string, shardCount int) (*ShardedSpeakerD
 		shard, err := NewPebbleSpeakerDatabase(shardDataDir)
 		if err != nil {
 			// Close already created shards on error
+			var closeErr error
 			for j := 0; j < i; j++ {
-				shards[j].Close()
+				if err := shards[j].Close(); err != nil {
+					closeErr = errors.Join(closeErr, err)
+				}
+			}
+			if closeErr != nil {
+				return nil, fmt.Errorf("failed to create shard %d: %v; failed to close initialized shards: %w", i, err, closeErr)
 			}
 			return nil, fmt.Errorf("failed to create shard %d: %v", i, err)
 		}

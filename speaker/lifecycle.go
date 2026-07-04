@@ -88,7 +88,9 @@ func NewManager(config *Config) (*Manager, error) {
 	if err != nil {
 		extractor.Delete()
 		embeddingManager.Delete()
-		shardedDB.Close()
+		if closeErr := shardedDB.Close(); closeErr != nil {
+			config.Logger.Errorf("failed to close speaker database after vector index initialization failure: %v", closeErr)
+		}
 		return nil, fmt.Errorf("failed to initialize vector index: %v", err)
 	}
 
@@ -158,10 +160,14 @@ func (m *Manager) Close() {
 		m.manager.Delete()
 	}
 	if m.database != nil {
-		m.database.Close()
+		if err := m.database.Close(); err != nil && m.logger != nil {
+			m.logger.Errorf("failed to close speaker database: %v", err)
+		}
 	}
 	if m.vectorIndex != nil {
-		m.vectorIndex.Close()
+		if err := m.vectorIndex.Close(); err != nil && m.logger != nil {
+			m.logger.Errorf("failed to close speaker vector index: %v", err)
+		}
 	}
 }
 

@@ -113,18 +113,13 @@ func (i *Integrator) alignTextWithSpeakers(
 	recognitionResult *recognitionResult,
 	diarizationResult *DiarizationResult,
 ) ([]SpeakerTextSegment, error) {
-
-	segments := []SpeakerTextSegment{}
-
 	// If we have word-level timestamps, use them for precise alignment
 	if len(recognitionResult.Words) > 0 {
-		segments = i.alignWithWordTimestamps(recognitionResult, diarizationResult)
-	} else {
-		// Fallback to time-based proportional alignment
-		segments = i.alignWithTimeProportions(recognitionResult, diarizationResult)
+		return i.alignWithWordTimestamps(recognitionResult, diarizationResult), nil
 	}
 
-	return segments, nil
+	// Fallback to time-based proportional alignment
+	return i.alignWithTimeProportions(recognitionResult, diarizationResult), nil
 }
 
 // alignWithWordTimestamps aligns using word-level timestamps

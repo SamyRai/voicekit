@@ -112,50 +112,6 @@ func CosineSimilarity(a, b []float32) float32 {
 	return similarity
 }
 
-// cosineSimilarityOptimized uses optimized calculation with better numerical stability
-func cosineSimilarityOptimized(a, b []float32) float32 {
-	if len(a) != len(b) {
-		return 0.0
-	}
-
-	// Use Kahan summation for better numerical stability
-	var dotProduct, normA, normB float32
-	var dotCompensate, normACompensate, normBCompensate float32
-
-	for i := 0; i < len(a); i++ {
-		// Dot product with Kahan summation
-		y := a[i]*b[i] - dotCompensate
-		t := dotProduct + y
-		dotCompensate = (t - dotProduct) - y
-		dotProduct = t
-
-		// Norm A with Kahan summation
-		y = a[i]*a[i] - normACompensate
-		t = normA + y
-		normACompensate = (t - normA) - y
-		normA = t
-
-		// Norm B with Kahan summation
-		y = b[i]*b[i] - normBCompensate
-		t = normB + y
-		normBCompensate = (t - normB) - y
-		normB = t
-	}
-
-	if normA <= 0 || normB <= 0 {
-		return 0.0
-	}
-
-	normA = float32(math.Sqrt(float64(normA)))
-	normB = float32(math.Sqrt(float64(normB)))
-
-	if normA == 0 || normB == 0 {
-		return 0.0
-	}
-
-	return dotProduct / (normA * normB)
-}
-
 // NoOpLogger provides a no-op implementation of Logger
 type NoOpLogger struct{}
 

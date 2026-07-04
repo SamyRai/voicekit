@@ -71,6 +71,15 @@ benchstat /tmp/voicekit-benchmarks/voicekit-perf-before.txt \
   /tmp/voicekit-benchmarks/voicekit-perf-after.txt
 ```
 
+The Makefile wraps this convention:
+
+```bash
+make bench-all
+make bench-profile
+make bench-memprofile
+make bench-compare BEFORE=/tmp/voicekit-benchmarks/before.txt AFTER=/tmp/voicekit-benchmarks/after.txt
+```
+
 Broader benchmark sweep:
 
 ```bash
@@ -110,10 +119,10 @@ Implementation notes:
   `HeuristicAnalyzer`, `Meeting.Redact`, all export formats, and
   `evaluation.EvaluateMeeting`.
 
-Historical note: tracked files under `benchmarks/` contain January 2026 Go 1.25
-measurements and should be treated as historical comparison material only. New
-decisions should use Go 1.26.4 benchmark output generated from the workflow
-above.
+Repository hygiene note: raw benchmark outputs, CPU profiles, and memory
+profiles are generated outside tracked source by default and ignored if created
+locally. Keep durable conclusions in this document instead of committing raw
+one-off benchmark artifacts.
 
 Dependency note: `go-audio-resampler` and `encoding/json/v2` were not adopted.
 Candidate libraries should stay behind scratch benchmarks and dependency review

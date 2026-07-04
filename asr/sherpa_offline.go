@@ -40,7 +40,7 @@ func NewSherpaOfflineModel(config *Config) (*SherpaOfflineModel, error) {
 	}
 	config.ApplyDefaults()
 	if config.Backend != BackendSherpaOffline {
-		return nil, fmt.Errorf("Sherpa offline recognizer requires backend %q, got %q", BackendSherpaOffline, config.Backend)
+		return nil, fmt.Errorf("sherpa offline recognizer requires backend %q, got %q", BackendSherpaOffline, config.Backend)
 	}
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -122,7 +122,7 @@ func buildOfflineRecognizerConfig(config *Config) (*sherpa.OfflineRecognizerConf
 	}, nil
 }
 
-func (m *SherpaOfflineModel) Transcribe(ctx context.Context, audio []float32, sampleRate int) (*types.Transcription, error) {
+func (m *SherpaOfflineModel) Transcribe(ctx context.Context, audio []float32, sampleRate int) (transcription *types.Transcription, err error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("context cannot be nil")
 	}
@@ -142,14 +142,18 @@ func (m *SherpaOfflineModel) Transcribe(ctx context.Context, audio []float32, sa
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed || m.recognizer == nil {
-		return nil, fmt.Errorf("Sherpa offline recognizer is closed")
+		return nil, fmt.Errorf("sherpa offline recognizer is closed")
 	}
 
 	stream, err := m.recognizer.NewStream()
 	if err != nil {
 		return nil, err
 	}
-	defer stream.Close()
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 
 	if err := stream.AcceptWaveform(sampleRate, audio); err != nil {
 		return nil, err
@@ -247,7 +251,7 @@ type nativeOfflineRecognizer struct {
 
 func (r *nativeOfflineRecognizer) NewStream() (offlineStream, error) {
 	if r == nil || r.recognizer == nil {
-		return nil, fmt.Errorf("Sherpa offline recognizer is closed")
+		return nil, fmt.Errorf("sherpa offline recognizer is closed")
 	}
 	stream := sherpa.NewOfflineStream(r.recognizer)
 	if stream == nil {
@@ -258,7 +262,7 @@ func (r *nativeOfflineRecognizer) NewStream() (offlineStream, error) {
 
 func (r *nativeOfflineRecognizer) Decode(stream offlineStream) error {
 	if r == nil || r.recognizer == nil {
-		return fmt.Errorf("Sherpa offline recognizer is closed")
+		return fmt.Errorf("sherpa offline recognizer is closed")
 	}
 	native, ok := stream.(*nativeOfflineStream)
 	if !ok || native.stream == nil {
@@ -283,7 +287,7 @@ type nativeOfflineStream struct {
 
 func (s *nativeOfflineStream) AcceptWaveform(sampleRate int, samples []float32) error {
 	if s == nil || s.stream == nil {
-		return fmt.Errorf("Sherpa offline stream is closed")
+		return fmt.Errorf("sherpa offline stream is closed")
 	}
 	if sampleRate <= 0 {
 		return fmt.Errorf("sampleRate must be positive, got %d", sampleRate)

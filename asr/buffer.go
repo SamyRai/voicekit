@@ -32,7 +32,8 @@ func NewAudioBuffer(config *types.StreamingConfig) *AudioBuffer {
 		size:       0,
 		pool: &sync.Pool{
 			New: func() interface{} {
-				return make([]float32, 0, config.ChunkSize*2)
+				buf := make([]float32, 0, config.ChunkSize*2)
+				return &buf
 			},
 		},
 	}
@@ -97,7 +98,8 @@ func (b *AudioBuffer) GetRecentChunk() []float32 {
 	startIdx := (b.writeIdx - chunkSize + b.capacity) % b.capacity
 
 	// Create result slice
-	result := b.pool.Get().([]float32)[:0]
+	resultPtr := b.pool.Get().(*[]float32)
+	result := (*resultPtr)[:0]
 	if cap(result) < chunkSize {
 		result = make([]float32, chunkSize)
 	} else {
@@ -143,5 +145,6 @@ func (b *AudioBuffer) Capacity() int {
 
 // ReturnBuffer returns a buffer slice to the pool for reuse
 func (b *AudioBuffer) ReturnBuffer(buf []float32) {
-	b.pool.Put(buf[:0]) // Reset length but keep capacity
+	buf = buf[:0] // Reset length but keep capacity
+	b.pool.Put(&buf)
 }

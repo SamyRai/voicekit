@@ -25,7 +25,7 @@ func ValidateHNSWParameters(dim, maxElements, m, efConstruction, efSearch int) e
 		return fmt.Errorf("maxElements must be positive")
 	}
 	if m <= 0 || m > 100 {
-		return fmt.Errorf("M must be between 1 and 100")
+		return fmt.Errorf("m must be between 1 and 100")
 	}
 	if efConstruction < m {
 		return fmt.Errorf("efConstruction must be >= M")
@@ -36,7 +36,7 @@ func ValidateHNSWParameters(dim, maxElements, m, efConstruction, efSearch int) e
 
 	// Additional performance recommendations
 	if m > 64 {
-		return fmt.Errorf("M > 64 may cause excessive memory usage")
+		return fmt.Errorf("m > 64 may cause excessive memory usage")
 	}
 	if efConstruction > 800 {
 		return fmt.Errorf("efConstruction > 800 may cause excessive build time")

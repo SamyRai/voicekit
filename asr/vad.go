@@ -217,12 +217,12 @@ func newSherpaVAD(config *VADConfig) (*sherpaVAD, error) {
 	case VADProviderTen:
 		modelConfig.TenVad = sherpa.TenVadModelConfig(model)
 	default:
-		return nil, fmt.Errorf("unsupported Sherpa VAD provider %q", config.Provider)
+		return nil, fmt.Errorf("unsupported sherpa VAD provider %q", config.Provider)
 	}
 
 	vad := sherpa.NewVoiceActivityDetector(modelConfig, config.BufferSizeSeconds)
 	if vad == nil {
-		return nil, fmt.Errorf("failed to create Sherpa VAD provider %s", config.Provider)
+		return nil, fmt.Errorf("failed to create sherpa VAD provider %s", config.Provider)
 	}
 	return &sherpaVAD{provider: config.Provider, vad: vad}, nil
 }
@@ -235,7 +235,7 @@ func (v *sherpaVAD) Process(audio []float32, state interface{}) (*types.VADResul
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.vad == nil {
-		return nil, fmt.Errorf("Sherpa VAD provider %s is closed", v.provider)
+		return nil, fmt.Errorf("sherpa VAD provider %s is closed", v.provider)
 	}
 
 	v.vad.AcceptWaveform(audio)

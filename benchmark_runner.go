@@ -28,11 +28,13 @@ type BenchmarkResult struct {
 // NewBenchmarkRunner creates a new benchmark runner
 func NewBenchmarkRunner(outputDir string) *BenchmarkRunner {
 	if outputDir == "" {
-		outputDir = "benchmarks"
+		outputDir = "/tmp/voicekit-benchmarks"
 	}
 
 	// Create output directory
-	os.MkdirAll(outputDir, 0755)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		outputDir = os.TempDir()
+	}
 
 	return &BenchmarkRunner{
 		outputDir: outputDir,
@@ -93,9 +95,9 @@ func (r *BenchmarkRunner) parseBenchmarkOutput(output, category string) {
 			if len(parts) >= 4 {
 				name := parts[0]
 				operations := parseOperations(parts[1])
-				nsPerOp := parseDuration(parts[2])
-				allocsPerOp := parseAllocations(parts[3])
-				bytesPerOp := parseBytes(parts[4])
+				nsPerOp := parseMetricDuration(parts, "ns/op")
+				allocsPerOp := parseMetricUint(parts, "allocs/op")
+				bytesPerOp := parseMetricUint(parts, "B/op")
 
 				result := &BenchmarkResult{
 					Name:        strings.TrimPrefix(name, "Benchmark"),
@@ -114,32 +116,26 @@ func (r *BenchmarkRunner) parseBenchmarkOutput(output, category string) {
 
 // Helper functions for parsing benchmark output
 func parseOperations(s string) int64 {
-	// Remove trailing "x" and parse
-	if strings.HasSuffix(s, "x") {
-		s = s[:len(s)-1]
-	}
-	return int64(parseInt(s))
+	return int64(parseInt(strings.TrimSuffix(s, "x")))
 }
 
-func parseDuration(s string) time.Duration {
-	// Parse ns/op format
-	if strings.HasSuffix(s, "ns/op") {
-		ns := parseInt(strings.TrimSuffix(s, "ns/op"))
-		return time.Duration(ns) * time.Nanosecond
+func parseMetricDuration(parts []string, unit string) time.Duration {
+	value := parseMetricUint(parts, unit)
+	if value == 0 {
+		return 0
 	}
-	return 0
+	return time.Duration(value) * time.Nanosecond
 }
 
-func parseAllocations(s string) uint64 {
-	if strings.HasSuffix(s, "allocs/op") {
-		return parseInt(strings.TrimSuffix(s, "allocs/op"))
-	}
-	return 0
-}
-
-func parseBytes(s string) uint64 {
-	if strings.HasSuffix(s, "B/op") {
-		return parseInt(strings.TrimSuffix(s, "B/op"))
+func parseMetricUint(parts []string, unit string) uint64 {
+	for i := 1; i < len(parts); i++ {
+		part := parts[i]
+		if part == unit && i > 0 {
+			return parseInt(parts[i-1])
+		}
+		if strings.HasSuffix(part, unit) {
+			return parseInt(strings.TrimSuffix(part, unit))
+		}
 	}
 	return 0
 }

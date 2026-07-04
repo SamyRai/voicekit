@@ -61,6 +61,9 @@ Current strengths:
 - Measured Go 1.26.4 local CPU performance baseline with optimized WAV/PCM
   decode, basic diarization segmentation, and benchmark coverage for
   meeting/evaluation surfaces.
+- Repository hygiene and CI guardrails: GitHub/Gitea-compatible workflow,
+  `make verify`, golangci-lint v2 config, forbidden-file checks, and ignored
+  local benchmark/model/runtime artifacts.
 - Focused tests, race validation, and env-gated model integration tests.
 
 Current product gaps:
@@ -297,6 +300,8 @@ Effort: Medium to Large.
 - Add DER-focused diarization evaluation and latency/memory benchmark reports.
 - Keep performance decisions tied to Go 1.26.4 benchstat output in
   `/tmp/voicekit-benchmarks` and avoid tracked one-off benchmark artifacts.
+- Keep `make verify` as the local and CI source of truth for formatting, lint,
+  vet, tests, race checks, and forbidden-file hygiene.
 - Design the next analyzer adapter boundary for a local LLM or hosted provider
   while keeping provider SDKs out of core meeting schemas.
 - Define consent and retention metadata for meeting artifacts before adding
@@ -358,6 +363,10 @@ dependency, or new model dependency. The developer handoff guide is
   PCM/WAV decode, range-first basic diarization segmentation, direct
   union-find clustering for current sizes, real root benchmarks, and
   meeting/evaluation benchmark coverage.
+- Completed: repository maintenance baseline with `.gitignore`,
+  golangci-lint v2, `make verify`, GitHub/Gitea-compatible CI, forbidden-file
+  checks, external benchmark/profile output paths, and removal of tracked
+  generated benchmark artifacts plus the stray `final-test` binary archive.
 - Still open: LLM-quality analyzer implementations, export adapters for
   external tools, consent and retention policy metadata, searchable meeting
   memory, DER-focused evaluation, latency dashboards, and real

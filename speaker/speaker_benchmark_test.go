@@ -28,25 +28,6 @@ func BenchmarkSpeakerSimilarity(b *testing.B) {
 	}
 }
 
-// BenchmarkSpeakerSimilarityOptimized benchmarks optimized similarity calculation
-func BenchmarkSpeakerSimilarityOptimized(b *testing.B) {
-	dim := 192
-	embedding1 := make([]float32, dim)
-	embedding2 := make([]float32, dim)
-
-	for i := 0; i < dim; i++ {
-		embedding1[i] = float32(math.Sin(float64(i) * 0.1))
-		embedding2[i] = float32(math.Cos(float64(i) * 0.1))
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		_ = CosineSimilarity(embedding1, embedding2) // Uses optimized version
-	}
-}
-
 // BenchmarkSpeakerSearch_10 benchmarks speaker search with 10 speakers
 func BenchmarkSpeakerSearch_10(b *testing.B) {
 	benchmarkSpeakerSearch(b, 10)

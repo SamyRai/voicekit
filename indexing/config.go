@@ -47,7 +47,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("maxElements must be positive, got %d", c.MaxElements)
 	}
 	if c.M <= 0 {
-		return fmt.Errorf("M must be positive, got %d", c.M)
+		return fmt.Errorf("m must be positive, got %d", c.M)
 	}
 	if c.EfConstruction < c.M {
 		return fmt.Errorf("efConstruction must be >= M, got %d < %d", c.EfConstruction, c.M)

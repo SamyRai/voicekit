@@ -1,0 +1,39 @@
+# OS/editor noise
+.DS_Store
+*.swp
+*.swo
+
+# Local environment and credentials. Keep examples trackable.
+.env
+.env.*
+!.env.example
+
+# Go build/test artifacts
+*.test
+*.out
+*.prof
+coverage.out
+coverage.txt
+profiles/
+
+# VoiceKit generated benchmark artifacts. Canonical benchmark notes live in
+# PERFORMANCE_IMPROVEMENTS.md; raw comparison files belong under /tmp by default.
+benchmarks/
+test_benchmarks/
+
+# Local runtime/model assets. Model paths are supplied by callers or deployment.
+models/
+model/
+model-cache/
+speaker_data/
+*.onnx
+*.gguf
+*.safetensors
+*.pt
+*.pth
+*.tflite
+*.mlmodel
+
+# Local binaries accidentally built at the repo root.
+/voicekit
+/final-test

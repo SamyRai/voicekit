@@ -166,7 +166,7 @@ func (s *Service) GetModel(name string) (Model, bool) {
 //
 // Returns:
 //   - Transcription with text, confidence, and partial/final status
-//   - Error if processing fails or context is cancelled
+//   - Error if processing fails or context is canceled
 //
 // Session management: sessions are automatically created on first call and
 // cleaned up after periods of inactivity. Multiple concurrent sessions supported.

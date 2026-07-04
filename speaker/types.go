@@ -45,9 +45,6 @@ type Manager struct {
 	dataDir      string
 	logger       Logger
 
-	// Scratch buffers for reuse
-	scratchEmbedding []float32 // Reused for embedding calculations
-
 	// Atomic counters for statistics (lock-free)
 	identifyRequests  int64 // Total identification requests
 	identifySuccesses int64 // Successful identifications

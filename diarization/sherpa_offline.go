@@ -79,7 +79,7 @@ func (b *sherpaOfflineBackend) Process(ctx context.Context, request Request) (*D
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed || b.diarizer == nil {
-		return nil, fmt.Errorf("Sherpa offline diarization backend is closed")
+		return nil, fmt.Errorf("sherpa offline diarization backend is closed")
 	}
 	expectedRate := b.diarizer.SampleRate()
 	if expectedRate > 0 && request.SampleRate != expectedRate {
@@ -163,7 +163,7 @@ func (d *nativeOfflineSpeakerDiarizer) SampleRate() int {
 
 func (d *nativeOfflineSpeakerDiarizer) Process(samples []float32) ([]sherpa.OfflineSpeakerDiarizationSegment, error) {
 	if d == nil || d.diarizer == nil {
-		return nil, fmt.Errorf("Sherpa offline diarizer is closed")
+		return nil, fmt.Errorf("sherpa offline diarizer is closed")
 	}
 	if len(samples) == 0 {
 		return nil, fmt.Errorf("audio cannot be empty")

@@ -37,7 +37,7 @@ func NewSherpaOfflineSynthesizer(config *Config) (*SherpaOfflineSynthesizer, err
 	}
 	config.ApplyDefaults()
 	if config.Backend != BackendSherpaOffline {
-		return nil, fmt.Errorf("Sherpa offline TTS requires backend %q, got %q", BackendSherpaOffline, config.Backend)
+		return nil, fmt.Errorf("sherpa offline TTS requires backend %q, got %q", BackendSherpaOffline, config.Backend)
 	}
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -186,7 +186,7 @@ func (s *SherpaOfflineSynthesizer) Synthesize(ctx context.Context, request types
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.synthesizer == nil {
-		return nil, fmt.Errorf("Sherpa offline TTS is closed")
+		return nil, fmt.Errorf("sherpa offline TTS is closed")
 	}
 	numSpeakers := s.synthesizer.NumSpeakers()
 	if numSpeakers > 0 && speakerID >= numSpeakers {
@@ -240,11 +240,11 @@ type nativeOfflineSynthesizer struct {
 
 func (s *nativeOfflineSynthesizer) Generate(text string, speakerID int, speed float32) (*generatedAudio, error) {
 	if s == nil || s.tts == nil {
-		return nil, fmt.Errorf("Sherpa offline TTS is closed")
+		return nil, fmt.Errorf("sherpa offline TTS is closed")
 	}
 	audio := s.tts.Generate(text, speakerID, speed)
 	if audio == nil {
-		return nil, fmt.Errorf("Sherpa offline TTS generation failed")
+		return nil, fmt.Errorf("sherpa offline TTS generation failed")
 	}
 	return &generatedAudio{
 		Samples:    audio.Samples,

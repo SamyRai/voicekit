@@ -1,121 +1,128 @@
-# VoiceKit Benchmarking Makefile
+# VoiceKit developer targets.
 
-.PHONY: bench bench-all bench-report bench-memory bench-load bench-compare
+GO_PACKAGES := ./...
+BENCH_PACKAGES ?= ./audio ./diarization ./speaker ./indexing ./asr ./meeting ./evaluation .
+BENCH_COUNT ?= 6
+BENCH_DIR ?= /tmp/voicekit-benchmarks
+PROFILE_DIR ?= /tmp/voicekit-profiles
+GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION_RAW := $(patsubst v%,%,$(GOLANGCI_LINT_VERSION))
+GO_BIN := $(shell go env GOPATH)/bin
 
-# Run all benchmarks
+.PHONY: verify forbidden-files mod-verify fmt-check tidy-check tools lint test vet race \
+	bench bench-all bench-audio bench-speaker bench-diarization bench-memory bench-load \
+	bench-report bench-compare bench-profile bench-memprofile bench-clean bench-comprehensive \
+	bench-help
+
+verify: forbidden-files mod-verify fmt-check tidy-check lint vet test race
+
+forbidden-files:
+	@scripts/check-forbidden-files.sh
+
+mod-verify:
+	@go mod verify
+
+fmt-check:
+	@unformatted="$$(gofmt -l $$(git ls-files '*.go'))"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "The following Go files are not gofmt-formatted:"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+
+tidy-check:
+	@go mod tidy
+	@git diff --exit-code go.mod go.sum
+
+tools:
+	@installed="$$(golangci-lint version 2>/dev/null | awk '{print $$4}' || true)"; \
+	if [ "$$installed" != "$(GOLANGCI_LINT_VERSION_RAW)" ]; then \
+		echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)"; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
+	fi
+
+lint: tools
+	@PATH="$(GO_BIN):$$PATH" golangci-lint run ./...
+
+test:
+	@go test $(GO_PACKAGES)
+
+vet:
+	@go vet $(GO_PACKAGES)
+
+race:
+	@if [ "$$(go env GOARCH)" = "amd64" ] || [ "$$(go env GOOS)" = "darwin" ]; then \
+		go test -race $(GO_PACKAGES); \
+	else \
+		echo "Skipping -race on $$(go env GOOS)/$$(go env GOARCH); running plain tests instead"; \
+		go test $(GO_PACKAGES); \
+	fi
+
+bench: bench-all
+
 bench-all:
-	@echo "🚀 Running Complete VoiceKit Benchmark Suite..."
-	@mkdir -p benchmarks
-	@go test -bench=. -benchmem -run=^$ ./audio ./speaker ./diarization . | tee benchmarks/raw_results_$(shell date +%Y%m%d_%H%M%S).txt
-	@echo "✅ Benchmark Suite Complete"
+	@mkdir -p "$(BENCH_DIR)"
+	@go test -bench=. -benchmem -run=^$$ -count=$(BENCH_COUNT) $(BENCH_PACKAGES) | tee "$(BENCH_DIR)/raw_results_$$(date +%Y%m%d_%H%M%S).txt"
 
-# Run audio benchmarks only
 bench-audio:
-	@echo "🎵 Running Audio Processing Benchmarks..."
-	@go test -bench=. -benchmem -run=^$ ./audio
+	@go test -bench=. -benchmem -run=^$$ -count=$(BENCH_COUNT) ./audio
 
-# Run speaker benchmarks only
 bench-speaker:
-	@echo "🎤 Running Speaker Recognition Benchmarks..."
-	@go test -bench=. -benchmem -run=^$ ./speaker
+	@go test -bench=. -benchmem -run=^$$ -count=$(BENCH_COUNT) ./speaker
 
-# Run diarization benchmarks only
 bench-diarization:
-	@echo "🎭 Running Diarization Benchmarks..."
-	@go test -bench=. -benchmem -run=^$ ./diarization
+	@go test -bench=. -benchmem -run=^$$ -count=$(BENCH_COUNT) ./diarization
 
-# Run memory-specific benchmarks
 bench-memory:
-	@echo "🧠 Running Memory Benchmarks..."
-	@go test -bench=BufferPool -benchmem -run=^$ ./audio
+	@go test -bench=BufferPool -benchmem -run=^$$ -count=$(BENCH_COUNT) ./audio
 
-# Run load testing simulation
 bench-load:
-	@echo "🔥 Running Load Test Simulation..."
-	@go test -bench=Concurrent -benchmem -run=^$ .
+	@go test -bench=Concurrent -benchmem -run=^$$ -count=$(BENCH_COUNT) .
 
-# Generate benchmark report
 bench-report:
-	@echo "📊 Generating Benchmark Report..."
-	@mkdir -p benchmarks
-	@go run benchmark_runner.go -report > benchmarks/benchmark_report_$(shell date +%Y%m%d_%H%M%S).md
-	@echo "✅ Report Generated"
+	@mkdir -p "$(BENCH_DIR)"
+	@go test -bench=. -benchmem -run=^$$ -count=$(BENCH_COUNT) $(BENCH_PACKAGES) | tee "$(BENCH_DIR)/benchmark_report_$$(date +%Y%m%d_%H%M%S).txt"
 
-# Compare with baseline (requires baseline results)
 bench-compare:
-	@echo "📈 Running Performance Comparison..."
-	@mkdir -p benchmarks
-	@go run benchmark_runner.go -compare > benchmarks/comparison_report_$(shell date +%Y%m%d_%H%M%S).md
-	@echo "✅ Comparison Report Generated"
+	@if ! command -v benchstat >/dev/null 2>&1; then \
+		echo "benchstat is required. Install with: go install golang.org/x/perf/cmd/benchstat@latest"; \
+		exit 1; \
+	fi
+	@if [ -z "$(BEFORE)" ] || [ -z "$(AFTER)" ]; then \
+		echo "Usage: make bench-compare BEFORE=/tmp/voicekit-benchmarks/before.txt AFTER=/tmp/voicekit-benchmarks/after.txt"; \
+		exit 1; \
+	fi
+	@benchstat "$(BEFORE)" "$(AFTER)"
 
-# Run benchmarks with CPU profiling
 bench-profile:
-	@echo "🔍 Running Benchmarks with CPU Profiling..."
-	@mkdir -p profiles
-	@go test -bench=. -benchmem -cpuprofile=profiles/cpu.prof -run=^$ ./audio ./speaker ./diarization .
-	@echo "✅ CPU Profile Generated: profiles/cpu.prof"
+	@mkdir -p "$(PROFILE_DIR)"
+	@go test -bench=. -benchmem -cpuprofile="$(PROFILE_DIR)/cpu.prof" -run=^$$ ./audio ./speaker ./diarization .
+	@echo "CPU profile: $(PROFILE_DIR)/cpu.prof"
 
-# Run benchmarks with memory profiling
 bench-memprofile:
-	@echo "🔍 Running Benchmarks with Memory Profiling..."
-	@mkdir -p profiles
-	@go test -bench=. -benchmem -memprofile=profiles/mem.prof -run=^$ ./audio ./speaker ./diarization .
-	@echo "✅ Memory Profile Generated: profiles/mem.prof"
+	@mkdir -p "$(PROFILE_DIR)"
+	@go test -bench=. -benchmem -memprofile="$(PROFILE_DIR)/mem.prof" -run=^$$ ./audio ./speaker ./diarization .
+	@echo "Memory profile: $(PROFILE_DIR)/mem.prof"
 
-# Clean benchmark artifacts
 bench-clean:
-	@echo "🧹 Cleaning Benchmark Artifacts..."
-	@rm -rf benchmarks/
-	@rm -rf profiles/
-	@echo "✅ Cleaned"
+	@for dir in "$(BENCH_DIR)" "$(PROFILE_DIR)"; do \
+		case "$$dir" in \
+			/tmp/voicekit-*) rm -rf "$$dir" ;; \
+			*) echo "Refusing to remove non-VoiceKit temp directory: $$dir"; exit 1 ;; \
+		esac; \
+	done
 
-# Run comprehensive benchmarking suite
-bench-comprehensive: bench-clean
-	@echo "🎯 Running Comprehensive Benchmark Suite..."
-	@mkdir -p benchmarks profiles
-	@echo "Step 1: Audio Benchmarks..."
-	@go test -bench=. -benchmem -run=^$ ./audio > benchmarks/audio_results.txt
-	@echo "Step 2: Speaker Benchmarks..."
-	@go test -bench=. -benchmem -run=^$ ./speaker > benchmarks/speaker_results.txt
-	@echo "Step 3: Diarization Benchmarks..."
-	@go test -bench=. -benchmem -run=^$ ./diarization > benchmarks/diarization_results.txt
-	@echo "Step 4: Memory Benchmarks..."
-	@go test -bench=BufferPool -benchmem -run=^$ ./audio > benchmarks/memory_results.txt
-	@echo "Step 5: Concurrent Benchmarks..."
-	@go test -bench=Concurrent -benchmem -run=^$ . > benchmarks/concurrent_results.txt
-	@echo "Step 6: Generating Summary Report..."
-	@echo "# VoiceKit Performance Benchmark Results" > benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "Generated: $$(date)" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "## Audio Processing Results" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@cat benchmarks/audio_results.txt >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "## Speaker Recognition Results" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@cat benchmarks/speaker_results.txt >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "## Diarization Results" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@cat benchmarks/diarization_results.txt >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "## Memory Performance" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@cat benchmarks/memory_results.txt >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "## Concurrent Performance" >> benchmarks/COMPREHENSIVE_REPORT.md
-	@cat benchmarks/concurrent_results.txt >> benchmarks/COMPREHENSIVE_REPORT.md
-	@echo "✅ Comprehensive Benchmark Suite Complete"
-	@echo "📊 Results saved to: benchmarks/COMPREHENSIVE_REPORT.md"
+bench-comprehensive: bench-report
 
-# Help target
 bench-help:
-	@echo "VoiceKit Benchmarking Targets:"
-	@echo "  bench-all          - Run all benchmarks"
-	@echo "  bench-audio        - Run audio processing benchmarks only"
-	@echo "  bench-speaker      - Run speaker recognition benchmarks only"
-	@echo "  bench-diarization  - Run diarization benchmarks only"
-	@echo "  bench-memory       - Run memory-specific benchmarks"
-	@echo "  bench-load         - Run load testing simulation"
-	@echo "  bench-profile      - Run benchmarks with CPU profiling"
-	@echo "  bench-memprofile   - Run benchmarks with memory profiling"
-	@echo "  bench-report       - Generate benchmark report"
-	@echo "  bench-compare      - Compare with baseline results"
-	@echo "  bench-comprehensive- Run full benchmarking suite with reports"
-	@echo "  bench-clean        - Clean benchmark artifacts"
+	@echo "VoiceKit targets:"
+	@echo "  verify            - Run repository hygiene, formatting, lint, vet, tests, and race gate"
+	@echo "  lint              - Run golangci-lint v2"
+	@echo "  test              - Run go test ./..."
+	@echo "  vet               - Run go vet ./..."
+	@echo "  race              - Run go test -race ./... when supported"
+	@echo "  bench-all         - Run broad benchmarks into $(BENCH_DIR)"
+	@echo "  bench-compare     - Compare two benchmark files with benchstat"
+	@echo "  bench-profile     - Write CPU profile into $(PROFILE_DIR)"
+	@echo "  bench-memprofile  - Write memory profile into $(PROFILE_DIR)"
+	@echo "  bench-clean       - Remove VoiceKit benchmark/profile temp directories"

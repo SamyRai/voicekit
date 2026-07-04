@@ -59,7 +59,7 @@ func NewSherpaOnlineModel(config *Config) (*SherpaOnlineModel, error) {
 	}
 	config.ApplyDefaults()
 	if config.Backend != BackendSherpaOnline {
-		return nil, fmt.Errorf("Sherpa online recognizer requires backend %q, got %q", BackendSherpaOnline, config.Backend)
+		return nil, fmt.Errorf("sherpa online recognizer requires backend %q, got %q", BackendSherpaOnline, config.Backend)
 	}
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -175,7 +175,7 @@ func (m *SherpaOnlineModel) prepareProcessState(ctx context.Context, audio []flo
 
 func (m *SherpaOnlineModel) processAudioLocked(ctx context.Context, audio []float32, state *types.StreamingState, finish bool, closeAfter bool) (*types.Transcription, error) {
 	if m.closed || m.recognizer == nil {
-		return nil, fmt.Errorf("Sherpa online recognizer is closed")
+		return nil, fmt.Errorf("sherpa online recognizer is closed")
 	}
 
 	if err := contextError(ctx); err != nil {
@@ -233,7 +233,7 @@ func (m *SherpaOnlineModel) decodeSessionLocked(ctx context.Context, session *on
 		return nil, false, err
 	}
 	if result == nil {
-		return nil, false, fmt.Errorf("Sherpa online recognizer returned nil result")
+		return nil, false, fmt.Errorf("sherpa online recognizer returned nil result")
 	}
 	return result, m.recognizer.IsEndpoint(session.stream), nil
 }
@@ -318,7 +318,7 @@ func (m *SherpaOnlineModel) Close() error {
 func (r *sherpaOnlineRecognizer) NewStream() (onlineStream, error) {
 	stream := sherpa.NewOnlineStream(r.recognizer)
 	if stream == nil {
-		return nil, fmt.Errorf("failed to create Sherpa online stream")
+		return nil, fmt.Errorf("failed to create sherpa online stream")
 	}
 	return &sherpaOnlineStream{stream: stream}, nil
 }
@@ -375,7 +375,7 @@ func (r *sherpaOnlineRecognizer) Close() error {
 
 func (s *sherpaOnlineStream) AcceptWaveform(sampleRate int, samples []float32) error {
 	if s.stream == nil {
-		return fmt.Errorf("Sherpa online stream is closed")
+		return fmt.Errorf("sherpa online stream is closed")
 	}
 	s.stream.AcceptWaveform(sampleRate, samples)
 	return nil
@@ -383,7 +383,7 @@ func (s *sherpaOnlineStream) AcceptWaveform(sampleRate int, samples []float32) e
 
 func (s *sherpaOnlineStream) InputFinished() error {
 	if s.stream == nil {
-		return fmt.Errorf("Sherpa online stream is closed")
+		return fmt.Errorf("sherpa online stream is closed")
 	}
 	s.stream.InputFinished()
 	return nil

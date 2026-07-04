@@ -135,8 +135,7 @@ func generateSyntheticAudioChunk(chunkIndex int) []float32 {
 	// This simulates different types of audio content
 
 	const sampleRate = 16000
-	const chunkSize = 16000
-	chunk := make([]float32, chunkSize)
+	chunk := make([]float32, sampleRate)
 
 	switch chunkIndex {
 	case 0:
