@@ -96,13 +96,19 @@ bench-compare:
 
 bench-profile:
 	@mkdir -p "$(PROFILE_DIR)"
-	@go test -bench=. -benchmem -cpuprofile="$(PROFILE_DIR)/cpu.prof" -run=^$$ ./audio ./speaker ./diarization .
-	@echo "CPU profile: $(PROFILE_DIR)/cpu.prof"
+	@for pkg in ./audio ./speaker ./diarization .; do \
+		name=$$(echo "$$pkg" | sed 's|^\.$$|root|; s|^\./||; s|/|_|g'); \
+		go test -bench=. -benchmem -run='^$$' -cpuprofile="$(PROFILE_DIR)/cpu_$$name.prof" "$$pkg" || exit 1; \
+	done
+	@echo "CPU profiles written to $(PROFILE_DIR)/cpu_*.prof"
 
 bench-memprofile:
 	@mkdir -p "$(PROFILE_DIR)"
-	@go test -bench=. -benchmem -memprofile="$(PROFILE_DIR)/mem.prof" -run=^$$ ./audio ./speaker ./diarization .
-	@echo "Memory profile: $(PROFILE_DIR)/mem.prof"
+	@for pkg in ./audio ./speaker ./diarization .; do \
+		name=$$(echo "$$pkg" | sed 's|^\.$$|root|; s|^\./||; s|/|_|g'); \
+		go test -bench=. -benchmem -run='^$$' -memprofile="$(PROFILE_DIR)/mem_$$name.prof" "$$pkg" || exit 1; \
+	done
+	@echo "Memory profiles written to $(PROFILE_DIR)/mem_*.prof"
 
 bench-clean:
 	@for dir in "$(BENCH_DIR)" "$(PROFILE_DIR)"; do \
