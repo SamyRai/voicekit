@@ -1,0 +1,118 @@
+# VoiceKit recommended model matrix (July 2026)
+#
+# Reference for the env-gated native smoke tests and the `make fetch-test-models`
+# target. VoiceKit ships NO model weights (see scripts/check-forbidden-files.sh);
+# this file only records which models to fetch into $VK_TEST_MODEL_DIR and where
+# they come from. `sha256` is intentionally empty — the fetch step pins the digest
+# on first download so it is never fabricated here.
+#
+# Sources:
+#  - sherpa-onnx model zoo:   https://github.com/k2-fsa/sherpa-onnx/releases
+#  - sherpa pretrained docs:  https://k2-fsa.github.io/sherpa/onnx/pretrained_models/index.html
+#
+# Selection rationale (2026 landscape):
+#  - Streaming ASR: NVIDIA Nemotron Speech Streaming 0.6B leads on-device/CPU
+#    (cache-aware FastConformer RNNT, sub-second latency, <1GB quantized, strong
+#    concurrency). It is an RNNT transducer, so it wires through the online
+#    "transducer" family (encoder/decoder/joiner) — no new config surface.
+#  - VAD: Silero v6 (MIT). TEN VAD is opt-in pending a license review.
+#  - Diarization: pyannote segmentation-3.0 (or 4.0 community-1) + 3D-Speaker CAM++.
+#  - TTS: Kokoro-82M as the efficiency default.
+
+asr_offline:
+  default: sense_voice
+  models:
+    - family: sense_voice
+      hf: FunAudioLLM/SenseVoiceSmall
+      note: multilingual (zh/en/ja/ko/yue), strong batch accuracy, single-file
+      url: ""
+      sha256: ""
+    - family: whisper
+      hf: openai/whisper-large-v3-turbo
+      note: multilingual reference; encoder+decoder
+      url: ""
+      sha256: ""
+    - family: paraformer
+      hf: csukuangfj/sherpa-onnx-paraformer-zh
+      url: ""
+      sha256: ""
+    - family: nemo_ctc
+      hf: nvidia/parakeet-tdt-0.6b-v3
+      note: top batch WER on the Open ASR leaderboard (GPU-favoured)
+      url: ""
+      sha256: ""
+
+asr_online:
+  default: nemotron_streaming
+  models:
+    - family: transducer          # Nemotron/Parakeet RNNT wire through transducer
+      key: nemotron_streaming
+      hf: nvidia/nemotron-speech-streaming-en-0.6b
+      note: recommended default for real-time on-device English streaming
+      url: ""
+      sha256: ""
+    - family: transducer
+      key: nemotron_streaming_multilingual
+      hf: nvidia/nemotron-3.5-asr-streaming-0.6b
+      note: 40 locales; prompt_index handled inside sherpa (no extra config)
+      url: ""
+      sha256: ""
+    - family: zipformer2_ctc
+      key: zipformer_streaming
+      hf: csukuangfj/sherpa-onnx-streaming-zipformer-en
+      note: efficient single-file streaming CTC alternative
+      url: ""
+      sha256: ""
+
+vad:
+  default: silero_vad
+  models:
+    - provider: silero_vad
+      hf: onnx-community/silero-vad          # Silero v6, MIT
+      file: silero_vad.onnx
+      url: ""
+      sha256: ""
+    - provider: ten_vad
+      hf: TEN-framework/ten-vad              # modified Apache-2.0, opt-in
+      url: ""
+      sha256: ""
+
+tts:
+  default: kokoro
+  models:
+    - family: kokoro
+      hf: hexgrad/Kokoro-82M
+      note: efficiency default; 8 languages, fixed voice packs
+      url: ""
+      sha256: ""
+    - family: kitten
+      hf: KittenML/kitten-tts-nano
+      url: ""
+      sha256: ""
+    - family: supertonic
+      note: Supertonic-3 (31 languages, expression tags)
+      url: ""
+      sha256: ""
+    - family: vits
+      hf: csukuangfj/vits-piper-en_US
+      url: ""
+      sha256: ""
+
+diarization:
+  default: sherpa_offline
+  segmentation:
+    - hf: pyannote/segmentation-3.0
+      note: or pyannote.audio 4.0 community-1
+      url: ""
+      sha256: ""
+  embedding:
+    - hf: 3D-Speaker/cam++                   # CAM++ speaker embedding
+      url: ""
+      sha256: ""
+
+speaker:
+  embedding:
+    - hf: 3D-Speaker/cam++
+      note: cosine similarity + HNSW index; typical dim 192-512
+      url: ""
+      sha256: ""
