@@ -10,9 +10,9 @@ import (
 
 // Logger interface for application layer logging
 type Logger interface {
-	Infof(format string, args ...interface{})
-	Warnf(format string, args ...interface{})
-	Errorf(format string, args ...interface{})
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+	Errorf(format string, args ...any)
 }
 
 // MetricsRecorder interface for recording application metrics

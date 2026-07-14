@@ -27,9 +27,9 @@ func (m *Manager) GetDatabaseStats() *DatabaseStats {
 }
 
 // GetStats returns statistics (for main service monitoring)
-func (m *Manager) GetStats() map[string]interface{} {
+func (m *Manager) GetStats() map[string]any {
 	stats := m.GetDatabaseStats()
-	return map[string]interface{}{
+	return map[string]any{
 		"speaker_count":      stats.TotalSpeakers,
 		"total_samples":      stats.TotalSamples,
 		"embedding_dim":      stats.EmbeddingDim,

@@ -69,9 +69,9 @@ type SpeakerDatabase interface {
 
 // Logger interface for speaker operations
 type Logger interface {
-	Infof(format string, args ...interface{})
-	Warnf(format string, args ...interface{})
-	Errorf(format string, args ...interface{})
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+	Errorf(format string, args ...any)
 }
 
 // SimilarityCalculator defines the interface for similarity calculations

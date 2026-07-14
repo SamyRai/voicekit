@@ -29,9 +29,9 @@ const (
 
 // Logger is the logging contract used by ASR without importing the root package.
 type Logger interface {
-	Infof(format string, args ...interface{})
-	Warnf(format string, args ...interface{})
-	Errorf(format string, args ...interface{})
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+	Errorf(format string, args ...any)
 }
 
 // OnlineConfig owns Sherpa online/streaming model paths.

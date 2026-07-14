@@ -296,12 +296,12 @@ type SpeakerSummary struct {
 }
 
 // ExportToWebSocketMessage converts integrated result to WebSocket message format
-func (i *Integrator) ExportToWebSocketMessage(result *IntegratedResult) map[string]interface{} {
+func (i *Integrator) ExportToWebSocketMessage(result *IntegratedResult) map[string]any {
 	if result == nil {
 		return nil
 	}
 
-	message := map[string]interface{}{
+	message := map[string]any{
 		"type":         "diarization_result",
 		"session_id":   result.SessionID,
 		"full_text":    result.FullText,
@@ -319,9 +319,9 @@ func (i *Integrator) ExportToWebSocketMessage(result *IntegratedResult) map[stri
 	}
 
 	if len(result.SpeakerSegments) > 0 {
-		segments := make([]map[string]interface{}, len(result.SpeakerSegments))
+		segments := make([]map[string]any, len(result.SpeakerSegments))
 		for i, segment := range result.SpeakerSegments {
-			segments[i] = map[string]interface{}{
+			segments[i] = map[string]any{
 				"speaker_id": segment.SpeakerID,
 				"start_time": segment.StartTime,
 				"end_time":   segment.EndTime,

@@ -105,7 +105,7 @@ func (p *PebbleSpeakerDatabase) migrateFromJSON(dataDir string) error {
 	}
 
 	// Store metadata
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"version":       jsonDB.Version,
 		"updated_at":    jsonDB.UpdatedAt,
 		"migrated_at":   time.Now(),
@@ -330,7 +330,7 @@ func (p *PebbleSpeakerDatabase) GetStats() (*DatabaseStats, error) {
 
 	if err == nil {
 		defer closer.Close()
-		var metadata map[string]interface{}
+		var metadata map[string]any
 		if err := json.Unmarshal(metadataValue, &metadata); err == nil {
 			if v, ok := metadata["version"].(string); ok {
 				version = v

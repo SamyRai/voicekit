@@ -302,17 +302,17 @@ type EmbeddingExtractor interface {
 
 // Logger interface for diarization operations.
 type Logger interface {
-	Infof(format string, args ...interface{})
-	Warnf(format string, args ...interface{})
-	Errorf(format string, args ...interface{})
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+	Errorf(format string, args ...any)
 }
 
 // NoOpLogger provides a no-op implementation of Logger.
 type NoOpLogger struct{}
 
-func (l *NoOpLogger) Infof(format string, args ...interface{})  {}
-func (l *NoOpLogger) Warnf(format string, args ...interface{})  {}
-func (l *NoOpLogger) Errorf(format string, args ...interface{}) {}
+func (l *NoOpLogger) Infof(format string, args ...any)  {}
+func (l *NoOpLogger) Warnf(format string, args ...any)  {}
+func (l *NoOpLogger) Errorf(format string, args ...any) {}
 
 // NewManager creates a diarization manager from the configured backend.
 func NewManager(config *DiarizationConfig, speakerDB SpeakerDatabase) (*Manager, error) {

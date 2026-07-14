@@ -115,6 +115,6 @@ func CosineSimilarity(a, b []float32) float32 {
 // NoOpLogger provides a no-op implementation of Logger
 type NoOpLogger struct{}
 
-func (l *NoOpLogger) Infof(format string, args ...interface{})  {}
-func (l *NoOpLogger) Warnf(format string, args ...interface{})  {}
-func (l *NoOpLogger) Errorf(format string, args ...interface{}) {}
+func (l *NoOpLogger) Infof(format string, args ...any)  {}
+func (l *NoOpLogger) Warnf(format string, args ...any)  {}
+func (l *NoOpLogger) Errorf(format string, args ...any) {}

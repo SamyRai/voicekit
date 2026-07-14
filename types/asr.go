@@ -75,8 +75,8 @@ type StreamingState struct {
 	SessionID      string
 	Language       string
 	Buffer         AudioBufferInterface
-	VADState       interface{}
-	ASRState       interface{}
+	VADState       any
+	ASRState       any
 	LastActivity   time.Time
 	PartialResults []Transcription
 }
@@ -127,5 +127,5 @@ type VADResult struct {
 	IsSpeech   bool
 	IsEndpoint bool
 	Confidence float64
-	State      interface{}
+	State      any
 }

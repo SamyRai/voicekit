@@ -11,7 +11,7 @@ import (
 
 // VADDetector is the provider seam for voice activity detection.
 type VADDetector interface {
-	Process(audio []float32, state interface{}) (*types.VADResult, error)
+	Process(audio []float32, state any) (*types.VADResult, error)
 	Close() error
 }
 
@@ -150,7 +150,7 @@ func applyVADDefaults(config *VADConfig) {
 }
 
 // Process processes audio for voice activity detection.
-func (v *VADService) Process(audio []float32, state interface{}) (*types.VADResult, error) {
+func (v *VADService) Process(audio []float32, state any) (*types.VADResult, error) {
 	if v == nil || v.detector == nil {
 		return nil, fmt.Errorf("VAD service is not initialized")
 	}
@@ -167,7 +167,7 @@ func (v *VADService) Close() error {
 
 type passThroughVAD struct{}
 
-func (passThroughVAD) Process(audio []float32, state interface{}) (*types.VADResult, error) {
+func (passThroughVAD) Process(audio []float32, state any) (*types.VADResult, error) {
 	return &types.VADResult{
 		IsSpeech:   len(audio) > 0,
 		IsEndpoint: false,
@@ -184,7 +184,7 @@ type energyVAD struct {
 	threshold float32
 }
 
-func (v *energyVAD) Process(audio []float32, state interface{}) (*types.VADResult, error) {
+func (v *energyVAD) Process(audio []float32, state any) (*types.VADResult, error) {
 	if len(audio) == 0 {
 		return &types.VADResult{IsSpeech: false, IsEndpoint: false, Confidence: 0, State: state}, nil
 	}
@@ -250,7 +250,7 @@ func newSherpaVAD(config *VADConfig) (*sherpaVAD, error) {
 	return &sherpaVAD{provider: config.Provider, vad: vad}, nil
 }
 
-func (v *sherpaVAD) Process(audio []float32, state interface{}) (*types.VADResult, error) {
+func (v *sherpaVAD) Process(audio []float32, state any) (*types.VADResult, error) {
 	if len(audio) == 0 {
 		return &types.VADResult{IsSpeech: false, IsEndpoint: false, Confidence: 0, State: state}, nil
 	}

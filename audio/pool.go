@@ -15,21 +15,21 @@ type AudioBufferPool struct {
 func NewAudioBufferPool() *AudioBufferPool {
 	return &AudioBufferPool{
 		small: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				// Default to 2048 float32 values (8KB)
 				buf := make([]float32, 0, 2048)
 				return &buf
 			},
 		},
 		medium: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				// Default to 16384 float32 values (64KB)
 				buf := make([]float32, 0, 16384)
 				return &buf
 			},
 		},
 		large: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				// Default to 131072 float32 values (512KB)
 				buf := make([]float32, 0, 131072)
 				return &buf
@@ -83,10 +83,10 @@ func (p *AudioBufferPool) Put(buf []float32) {
 }
 
 // GetStats returns statistics about pool usage (for monitoring)
-func (p *AudioBufferPool) GetStats() map[string]interface{} {
+func (p *AudioBufferPool) GetStats() map[string]any {
 	// Note: sync.Pool doesn't provide built-in statistics
 	// This is a placeholder for future monitoring integration
-	return map[string]interface{}{
+	return map[string]any{
 		"pool_type":    "size_classed_audio_buffer",
 		"size_classes": []string{"small (<=8KB)", "medium (<=64KB)", "large (>64KB)"},
 	}
@@ -101,7 +101,7 @@ type Float32BufferPool struct {
 func NewFloat32BufferPool(defaultCapacity int) *Float32BufferPool {
 	return &Float32BufferPool{
 		pool: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				buf := make([]float32, 0, defaultCapacity)
 				return &buf
 			},
@@ -140,7 +140,7 @@ type Int16BufferPool struct {
 func NewInt16BufferPool(defaultCapacity int) *Int16BufferPool {
 	return &Int16BufferPool{
 		pool: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				buf := make([]int16, 0, defaultCapacity)
 				return &buf
 			},
@@ -179,7 +179,7 @@ type ByteBufferPool struct {
 func NewByteBufferPool(defaultCapacity int) *ByteBufferPool {
 	return &ByteBufferPool{
 		pool: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				buf := make([]byte, 0, defaultCapacity)
 				return &buf
 			},

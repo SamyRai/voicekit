@@ -31,7 +31,7 @@ func NewAudioBuffer(config *types.StreamingConfig) *AudioBuffer {
 		writeIdx:   0,
 		size:       0,
 		pool: &sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				buf := make([]float32, 0, config.ChunkSize*2)
 				return &buf
 			},
