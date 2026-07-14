@@ -30,6 +30,12 @@ type DiarizationConfig struct {
 	ReassignmentThreshold float64 `json:"reassignment_threshold"`
 	OverlapThreshold      float64 `json:"overlap_threshold"`
 
+	// SegmentationModelPath and EmbeddingModelPath supply the sherpa offline
+	// diarization backend. Recommended (July 2026): pyannote-segmentation-3.0 (or
+	// the newer pyannote.audio 4.0 "community-1" pipeline) for segmentation, and a
+	// 3D-Speaker CAM++ embedding extractor. Speaker IDs are per-request; to track
+	// the same person across recordings, pair diarization with the speaker package
+	// and maintain an embedding store.
 	SegmentationModelPath string  `json:"segmentation_model_path"`
 	EmbeddingModelPath    string  `json:"embedding_model_path"`
 	Provider              string  `json:"provider"`
