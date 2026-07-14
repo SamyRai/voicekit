@@ -44,6 +44,10 @@ type Manager struct {
 	embeddingDim int
 	dataDir      string
 	logger       Logger
+	maxSpeakers  int // 0 = unlimited; otherwise the retention cap enforced on registration
+
+	// retentionMu serializes eviction so concurrent registrations do not over-evict.
+	retentionMu sync.Mutex
 
 	// Atomic counters for statistics (lock-free)
 	identifyRequests  int64 // Total identification requests
@@ -64,7 +68,10 @@ type Config struct {
 	Provider   string  `json:"provider"`
 	Threshold  float32 `json:"threshold"`
 	DataDir    string  `json:"data_dir"`
-	Logger     Logger  `json:"-"`
+	// MaxSpeakers bounds the database size. When >0, registering a new speaker
+	// beyond the cap evicts the oldest speakers (by CreatedAt). 0 means unlimited.
+	MaxSpeakers int    `json:"max_speakers"`
+	Logger      Logger `json:"-"`
 }
 
 // Validate validates speaker configuration
@@ -86,6 +93,10 @@ func (c *Config) Validate() error {
 
 	if c.Threshold < 0.0 || c.Threshold > 1.0 {
 		return fmt.Errorf("threshold must be between 0.0-1.0, got %f", c.Threshold)
+	}
+
+	if c.MaxSpeakers < 0 {
+		return fmt.Errorf("max speakers cannot be negative, got %d", c.MaxSpeakers)
 	}
 
 	// Validate data directory

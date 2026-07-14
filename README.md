@@ -352,7 +352,7 @@ type Logger interface {
 
 ### Memory Management
 - **Large Files**: Memory usage scales linearly with audio duration
-- **Long Sessions**: Speaker database grows indefinitely without cleanup
+- **Long Sessions**: Set `Speaker.MaxSpeakers` to bound the database; new registrations beyond the cap evict the oldest speakers (by `CreatedAt`). Left at 0, the database grows without automatic cleanup.
 - **Goroutine Leaks**: Improper cleanup may leave goroutines running
 
 ## Future Enhancements

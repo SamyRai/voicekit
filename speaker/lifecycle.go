@@ -141,6 +141,7 @@ func NewManager(config *Config) (*Manager, error) {
 		embeddingDim: dim,
 		dataDir:      config.DataDir,
 		logger:       config.Logger,
+		maxSpeakers:  config.MaxSpeakers,
 	}
 
 	// Load speakers into memory manager

@@ -48,6 +48,7 @@ func (m *Manager) RegisterSpeakerContext(ctx context.Context, speakerID, speaker
 		return err
 	}
 
+	m.enforceRetention(ctx)
 	return nil
 }
 
