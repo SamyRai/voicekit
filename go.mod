@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/go-audio/wav v1.1.0
-	github.com/k2-fsa/sherpa-onnx-go v1.13.3
+	github.com/k2-fsa/sherpa-onnx-go v1.13.4
 	github.com/viktordanov/go-hnswlib v1.4.0
 )
 
@@ -25,9 +25,9 @@ require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.3 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.3 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.3 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.4 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4 // indirect
 	github.com/klauspost/compress v1.16.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
