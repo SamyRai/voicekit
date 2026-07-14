@@ -27,6 +27,12 @@ type Session struct {
 	LastActivity time.Time
 	Created      time.Time
 	Config       *types.StreamingConfig
+
+	// mu serializes operations on State (its Buffer and ASRState) so that an
+	// in-flight process/finalize and idle cleanup cannot race on the same
+	// session's audio buffer or native ASR stream. The manager's mu guards the
+	// sessions map; this guards a single session's mutable state.
+	mu sync.Mutex
 }
 
 // Use StreamingConfig from types package
@@ -72,8 +78,10 @@ func NewStreamingManager(config *types.StreamingConfig) *StreamingManager {
 	return manager
 }
 
-// GetState gets or creates a streaming state for a session
-func (m *StreamingManager) GetState(sessionID string) (*types.StreamingState, error) {
+// getOrCreateSession returns the session for sessionID, creating it if absent,
+// and marks it active. Callers must hold the returned session's mutex while
+// operating on its State so those operations are serialized with idle cleanup.
+func (m *StreamingManager) getOrCreateSession(sessionID string) *Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -103,14 +111,20 @@ func (m *StreamingManager) GetState(sessionID string) (*types.StreamingState, er
 		session.State.LastActivity = session.LastActivity
 	}
 
-	return session.State, nil
+	return session
 }
 
-// stateForSession returns the streaming state for an existing session, marking
-// it active so an in-flight finalization is not concurrently reaped by the idle
-// cleanup. It does not create a session; the second return value reports whether
-// the session exists.
-func (m *StreamingManager) stateForSession(sessionID string) (*types.StreamingState, bool) {
+// GetState gets or creates a streaming state for a session.
+func (m *StreamingManager) GetState(sessionID string) (*types.StreamingState, error) {
+	return m.getOrCreateSession(sessionID).State, nil
+}
+
+// sessionForFinalize returns an existing session, marking it active so an
+// in-flight finalization is not concurrently reaped by the idle cleanup. It does
+// not create a session; the second return value reports whether the session
+// exists. Callers must hold the returned session's mutex while operating on its
+// State.
+func (m *StreamingManager) sessionForFinalize(sessionID string) (*Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -120,16 +134,16 @@ func (m *StreamingManager) stateForSession(sessionID string) (*types.StreamingSt
 	}
 	session.LastActivity = time.Now()
 	session.State.LastActivity = session.LastActivity
-	return session.State, true
+	return session, true
 }
 
 // RemoveSession removes a streaming session
 func (m *StreamingManager) RemoveSession(sessionID string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	session, exists := m.sessions[sessionID]
 	if !exists {
+		m.mu.Unlock()
 		return fmt.Errorf("session %s not found", sessionID)
 	}
 
@@ -143,7 +157,12 @@ func (m *StreamingManager) RemoveSession(sessionID string) error {
 	if m.metrics.ActiveSessions != nil {
 		m.metrics.ActiveSessions.Dec()
 	}
+	m.mu.Unlock()
 
+	// Close outside the manager lock, under the session lock, so an in-flight
+	// process/finalize on this session finishes before its ASR state is closed.
+	session.mu.Lock()
+	defer session.mu.Unlock()
 	if err := closeASRState(session.State); err != nil {
 		return fmt.Errorf("failed to close session ASR state: %w", err)
 	}
@@ -166,14 +185,22 @@ func (m *StreamingManager) Close() error {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var errs []error
+	sessions := make([]*Session, 0, len(m.sessions))
 	for sessionID, session := range m.sessions {
-		if err := closeASRState(session.State); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close session %s ASR state: %w", sessionID, err))
-		}
+		sessions = append(sessions, session)
 		delete(m.sessions, sessionID)
+	}
+	m.mu.Unlock()
+
+	// Close each session's ASR state under its own lock so a concurrent
+	// process/finalize on that session cannot race with the close.
+	var errs []error
+	for _, session := range sessions {
+		session.mu.Lock()
+		if err := closeASRState(session.State); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close session %s ASR state: %w", session.ID, err))
+		}
+		session.mu.Unlock()
 	}
 
 	if len(errs) > 0 {
@@ -200,44 +227,41 @@ func (m *StreamingManager) startCleanup() {
 	}()
 }
 
-// cleanupExpiredSessions removes expired sessions
+// cleanupExpiredSessions removes expired sessions and closes their ASR state.
 func (m *StreamingManager) cleanupExpiredSessions() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	now := time.Now()
-	var expiredSessions []string
 
+	// Collect and unlink expired sessions under the manager lock, then close
+	// their ASR state outside it (under each session's own lock) so cleanup
+	// cannot race with an in-flight process/finalize on the same session.
+	m.mu.Lock()
+	var expired []*Session
 	for sessionID, session := range m.sessions {
-		if now.Sub(session.LastActivity) > m.config.IdleTimeout {
-			expiredSessions = append(expiredSessions, sessionID)
+		idle := now.Sub(session.LastActivity) > m.config.IdleTimeout
+		aged := now.Sub(session.Created) > m.config.StreamTimeout
+		if !idle && !aged {
 			continue
 		}
 
-		if now.Sub(session.Created) > m.config.StreamTimeout {
-			expiredSessions = append(expiredSessions, sessionID)
-			continue
-		}
-	}
-
-	for _, sessionID := range expiredSessions {
-		session := m.sessions[sessionID]
+		expired = append(expired, session)
+		delete(m.sessions, sessionID)
 
 		if m.metrics.SessionTimeouts != nil {
 			m.metrics.SessionTimeouts.Inc()
 		}
-
 		if m.metrics.SessionDuration != nil {
-			duration := time.Since(session.Created).Seconds()
-			m.metrics.SessionDuration.Observe(duration)
+			m.metrics.SessionDuration.Observe(time.Since(session.Created).Seconds())
 		}
-
-		_ = closeASRState(session.State)
-		delete(m.sessions, sessionID)
-
 		if m.metrics.ActiveSessions != nil {
 			m.metrics.ActiveSessions.Dec()
 		}
+	}
+	m.mu.Unlock()
+
+	for _, session := range expired {
+		session.mu.Lock()
+		_ = closeASRState(session.State)
+		session.mu.Unlock()
 	}
 }
 

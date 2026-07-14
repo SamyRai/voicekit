@@ -190,11 +190,13 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 		}
 	}()
 
-	// Get or create streaming state
-	state, err := s.streaming.GetState(sessionID)
-	if err != nil {
-		return nil, newSessionError("streaming_state", sessionID, err)
-	}
+	// Get or create the session and hold its lock for the duration of the
+	// operation so buffer/ASR-state mutations are serialized with idle cleanup
+	// and any concurrent finalize on the same session.
+	session := s.streaming.getOrCreateSession(sessionID)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	state := session.State
 
 	// Add audio to buffer
 	if err := state.Buffer.Append(audio); err != nil {
@@ -279,13 +281,16 @@ func (s *Service) FinishStream(ctx context.Context, sessionID string) (*types.Tr
 		return nil, fmt.Errorf("sessionID cannot be empty")
 	}
 
-	state, ok := s.streaming.stateForSession(sessionID)
-	if !ok || state.Buffer == nil || state.Buffer.Size() == 0 {
-		language := "en"
-		if ok && state != nil {
-			language = state.Language
-		}
-		return emptyFinalTranscription(language), nil
+	session, ok := s.streaming.sessionForFinalize(sessionID)
+	if !ok {
+		return emptyFinalTranscription("en"), nil
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	state := session.State
+	if state.Buffer == nil || state.Buffer.Size() == 0 {
+		return emptyFinalTranscription(state.Language), nil
 	}
 
 	transcription, err := s.finalizeTranscription(ctx, sessionID, state)

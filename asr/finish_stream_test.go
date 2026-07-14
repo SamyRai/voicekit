@@ -2,6 +2,8 @@ package asr
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/SamyRai/voicekit/types"
@@ -118,6 +120,42 @@ func TestFinishStreamValidatesArguments(t *testing.T) {
 	if _, err := service.FinishStream(context.Background(), ""); err == nil {
 		t.Fatal("expected error for empty sessionID")
 	}
+}
+
+// TestFinishStreamRaceWithIdleCleanup finalizes sessions while the idle reaper
+// (and RemoveSession) close the same sessions concurrently. Before the
+// per-session lock this raced on state.ASRState / the native online stream; it
+// must run clean under -race.
+func TestFinishStreamRaceWithIdleCleanup(t *testing.T) {
+	recognizer := &fakeOnlineRecognizer{}
+	model := newSherpaOnlineModelForTest(recognizer)
+
+	service := newTestService()
+	service.config.DefaultModel = model.Name()
+	defer service.Close()
+	if err := service.RegisterModel(model); err != nil {
+		t.Fatalf("failed to register model: %v", err)
+	}
+	// Force the reaper to consider every session expired immediately.
+	service.streaming.config.IdleTimeout = 0
+
+	ctx := context.Background()
+	audio := make([]float32, service.config.ChunkSize)
+
+	var wg sync.WaitGroup
+	for i := range 50 {
+		sessionID := fmt.Sprintf("race-%d", i)
+		// Seed the session with buffered audio and a native ASR stream.
+		if _, err := service.ProcessAudioChunk(ctx, sessionID, audio); err != nil {
+			t.Fatalf("seed process failed: %v", err)
+		}
+
+		wg.Add(3)
+		go func() { defer wg.Done(); _, _ = service.FinishStream(ctx, sessionID) }()
+		go func() { defer wg.Done(); service.streaming.cleanupExpiredSessions() }()
+		go func() { defer wg.Done(); _ = service.streaming.RemoveSession(sessionID) }()
+	}
+	wg.Wait()
 }
 
 var _ types.ASRService = (*Service)(nil)
