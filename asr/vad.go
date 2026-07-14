@@ -168,14 +168,16 @@ func (v *energyVAD) Process(audio []float32, state interface{}) (*types.VADResul
 		return &types.VADResult{IsSpeech: false, IsEndpoint: false, Confidence: 0, State: state}, nil
 	}
 
+	// meanSquare is the average per-sample energy (not RMS: no square root is
+	// taken). The threshold is compared against this mean-square energy directly.
 	var sum float32
 	for _, sample := range audio {
 		sum += sample * sample
 	}
-	rms := sum / float32(len(audio))
+	meanSquare := sum / float32(len(audio))
 
 	return &types.VADResult{
-		IsSpeech:   rms > v.threshold,
+		IsSpeech:   meanSquare > v.threshold,
 		IsEndpoint: false,
 		Confidence: 0,
 		State:      state,

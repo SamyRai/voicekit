@@ -221,11 +221,18 @@ func (b *basicBackend) initializeUnionFind(size int) {
 	}
 }
 
+// find returns the set representative for x, applying path compression. It is
+// iterative (two passes) rather than recursive so that a pathological chain of
+// segments cannot overflow the goroutine stack.
 func (b *basicBackend) find(x int) int {
-	if b.ufParent[x] != x {
-		b.ufParent[x] = b.find(b.ufParent[x])
+	root := x
+	for b.ufParent[root] != root {
+		root = b.ufParent[root]
 	}
-	return b.ufParent[x]
+	for b.ufParent[x] != root {
+		b.ufParent[x], x = root, b.ufParent[x]
+	}
+	return root
 }
 
 func (b *basicBackend) union(x, y int) {

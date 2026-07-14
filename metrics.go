@@ -1,17 +1,9 @@
 package voicekit
 
 import (
-	"sync"
 	"sync/atomic"
 	"time"
 )
-
-// metricsSnapshotPool provides object pooling for MetricsSnapshot to reduce GC pressure
-var metricsSnapshotPool = sync.Pool{
-	New: func() interface{} {
-		return &MetricsSnapshot{}
-	},
-}
 
 // MetricsCollector collects performance metrics for VoiceKit operations
 type MetricsCollector struct {
@@ -107,9 +99,11 @@ func (m *MetricsCollector) RecordDiarization(duration time.Duration, success boo
 	}
 }
 
-// GetMetrics returns current metrics snapshot using object pooling for efficiency
+// GetMetrics returns a point-in-time snapshot of the collected metrics. Each call
+// returns a freshly allocated snapshot that the caller fully owns; callers may
+// retain it for as long as they like.
 func (m *MetricsCollector) GetMetrics() *MetricsSnapshot {
-	snapshot := metricsSnapshotPool.Get().(*MetricsSnapshot)
+	snapshot := &MetricsSnapshot{}
 	snapshot.AudioProcessCount = atomic.LoadInt64(&m.audioProcessCount)
 	snapshot.AudioProcessLatency = time.Duration(atomic.LoadInt64(&m.audioProcessLatency))
 	snapshot.AudioErrors = atomic.LoadInt64(&m.audioErrors)
@@ -133,8 +127,8 @@ func (m *MetricsCollector) GetMetrics() *MetricsSnapshot {
 	return snapshot
 }
 
-// MetricsSnapshot represents a point-in-time snapshot of metrics
-// Instances are pooled for efficiency - avoid long-term retention
+// MetricsSnapshot represents a point-in-time snapshot of metrics. Each snapshot is
+// independently owned by the caller of GetMetrics.
 type MetricsSnapshot struct {
 	// Audio processing
 	AudioProcessCount   int64         `json:"audio_process_count"`
