@@ -16,6 +16,11 @@ const (
 	OfflineFamilySenseVoice   = "sense_voice"
 	OfflineFamilyWhisper      = "whisper"
 
+	// VAD providers. "none" and "energy" are dependency-free; the neural
+	// providers require a model path (see validateVAD). Recommended default for
+	// production is Silero VAD (v6.x, MIT-licensed, ~6000 languages). TEN VAD can
+	// have lower turn-detection latency but ships under a modified Apache-2.0
+	// license, so it is opt-in and left to the caller after a license review.
 	VADProviderNone   = "none"
 	VADProviderEnergy = "energy"
 	VADProviderSilero = "silero_vad"
