@@ -12,7 +12,7 @@ A reusable Go 1.26.4 library for local voice processing experiments and audio pl
 
 | Capability | Status | Runtime requirements |
 | --- | --- | --- |
-| Audio conversion/resampling | Usable foundation | WAV/PCM only for in-library encode/decode; compressed formats return explicit unsupported errors. |
+| Audio conversion/resampling | Usable foundation | WAV/PCM encode/decode; FLAC/MP3/Ogg-Vorbis decode via pure-Go libraries. AAC/M4A and compressed encoding return explicit unsupported errors. |
 | Speaker recognition | Experimental but real | Sherpa speaker embedding model path and speaker data directory. Speaker embedding streams are single-use and released after extraction. |
 | ASR | Sherpa offline transcriber plus Sherpa online streaming service | Offline or online Sherpa model files. ASR enabled without required backend paths is a validation error. |
 | VAD | Runtime seam with explicit providers | `none`, `energy`, or Sherpa Silero/TEN with a configured model path. |
@@ -23,6 +23,20 @@ A reusable Go 1.26.4 library for local voice processing experiments and audio pl
 For the developer handoff guide covering meeting data flow, analyzer extension
 points, redaction/export safety, evaluation metrics, and validation commands,
 see [MEETING_INTELLIGENCE.md](MEETING_INTELLIGENCE.md).
+
+### Recommended models (July 2026)
+
+Model files are supplied by the caller; [`testdata/model_matrix.yaml`](testdata/model_matrix.yaml)
+records the recommended choices and their sources:
+
+- **Streaming ASR**: NVIDIA Nemotron Speech Streaming 0.6B (RNNT transducer — use
+  the online `transducer` family); Zipformer2-CTC / Parakeet as alternatives.
+- **Offline ASR**: SenseVoice (multilingual, single-file); Whisper for reference.
+- **VAD**: Silero VAD v6 (MIT) by default; TEN VAD is opt-in pending a license review.
+- **Diarization**: pyannote segmentation-3.0 (or 4.0 community-1) + 3D-Speaker CAM++.
+- **TTS**: Kokoro-82M as the efficiency default.
+
+Runs on sherpa-onnx-go v1.13.4 (ONNX Runtime 1.27). Build with Go 1.26.5 in CI/Docker.
 
 ## Installation
 
@@ -305,7 +319,7 @@ type Logger interface {
 ## Limitations and Known Issues
 
 ### Audio Format Support
-- **Compressed Formats**: MP3/FLAC/OGG/M4A/AAC encode/decode are not implemented and return explicit unsupported-format errors
+- **Compressed Formats**: FLAC, MP3, and Ogg/Vorbis **decoding** are supported via pure-Go libraries (no CGO); AAC/M4A decoding and all compressed **encoding** are not implemented and return explicit unsupported-format errors
 - **Metadata**: Format-specific metadata (tags, etc.) not preserved
 - **Sample Rates**: Limited testing on extreme sample rates (>192kHz, <8kHz)
 

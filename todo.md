@@ -1,5 +1,17 @@
 # VoiceKit Foundation Sprint Todo
 
+## Hardening & currency sprint (July 2026)
+
+- [x] Remove inert metrics snapshot pool; clarify energy-VAD mean-square; iterative union-find.
+- [x] Hermetic config field-mapping tests for all ASR, TTS, VAD, and diarization families.
+- [x] Upgrade sherpa-onnx-go v1.13.3 -> v1.13.4 (ONNX Runtime 1.27).
+- [x] VAD provider-selection coverage + Silero-default / TEN-opt-in policy.
+- [x] Recommended model matrix (`testdata/model_matrix.yaml`, Nemotron streaming default).
+- [x] Decode FLAC/MP3/Ogg-Vorbis via pure-Go libraries (AAC/M4A remain unsupported).
+- [x] Race regression for concurrent online ASR process vs close.
+- [ ] `make fetch-test-models` + broader env-gated native smoke (needs pinned model URLs).
+- [ ] Stretch: speaker DB retention/eviction; measured performance pass.
+
 ## Baseline and Reference
 
 - [x] Create branch `dev/voicekit-foundation-sprint`.
