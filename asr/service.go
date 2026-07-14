@@ -224,13 +224,7 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 				}
 
 				if !vadResult.IsSpeech {
-					return &types.Transcription{
-						Text:       "",
-						IsPartial:  false,
-						Confidence: 0.0,
-						Language:   state.Language,
-						Timestamp:  time.Now(),
-					}, nil
+					return emptyFinalTranscription(state.Language), nil
 				}
 			}
 		}
@@ -260,13 +254,60 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	}
 
 	// Buffer not ready yet, return empty result
+	return emptyFinalTranscription(state.Language), nil
+}
+
+// FinishStream finalizes the streaming session identified by sessionID.
+//
+// It flushes any buffered audio through a final decode (signaling
+// InputFinished to the underlying model) and returns a non-partial
+// transcription. Callers use it to force a final hypothesis at their own
+// utterance boundary instead of waiting for a VAD endpoint; it is the public
+// entry point to the same finalization path the VAD endpoint takes internally.
+//
+// Finalizing a session that does not exist, or one with no buffered audio,
+// yields an empty non-partial transcription rather than an error, so callers
+// may finalize idempotently.
+//
+// Thread-safe: can be called concurrently with ProcessAudioChunk for other
+// sessions.
+func (s *Service) FinishStream(ctx context.Context, sessionID string) (*types.Transcription, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context cannot be nil")
+	}
+	if sessionID == "" {
+		return nil, fmt.Errorf("sessionID cannot be empty")
+	}
+
+	state, ok := s.streaming.stateForSession(sessionID)
+	if !ok || state.Buffer == nil || state.Buffer.Size() == 0 {
+		language := "en"
+		if ok && state != nil {
+			language = state.Language
+		}
+		return emptyFinalTranscription(language), nil
+	}
+
+	transcription, err := s.finalizeTranscription(ctx, sessionID, state)
+	if err != nil {
+		if s.metrics != nil && s.metrics.ErrorsTotal != nil {
+			s.metrics.ErrorsTotal.Inc()
+		}
+		return nil, newSessionError("finalization", sessionID, err)
+	}
+	return transcription, nil
+}
+
+// emptyFinalTranscription builds a non-partial transcription with no text,
+// used when there is nothing to emit for a session.
+func emptyFinalTranscription(language string) *types.Transcription {
 	return &types.Transcription{
 		Text:       "",
 		IsPartial:  false,
 		Confidence: 0.0,
-		Language:   state.Language,
+		Language:   language,
 		Timestamp:  time.Now(),
-	}, nil
+	}
 }
 
 // processWithASR processes audio using the selected ASR model

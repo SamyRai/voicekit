@@ -281,6 +281,7 @@ func (c *Config) validateCommon() []error {
 
 func (c *Config) validateVAD() []error {
 	var errs []error
+	c.VADProvider = normalizeVADProvider(c.VADProvider)
 	switch c.VADProvider {
 	case VADProviderNone, VADProviderEnergy:
 	case VADProviderSilero, VADProviderTen:

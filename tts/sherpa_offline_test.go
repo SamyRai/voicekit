@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,34 @@ func TestConfigValidateKokoroRequiresModelPaths(t *testing.T) {
 
 	if err := config.Validate(); err == nil {
 		t.Fatal("enabled Kokoro TTS without model paths should fail")
+	}
+}
+
+// TestConfigValidateKokoroMultilingualRequiresLang proves that a Kokoro
+// config with a Lexicon set (the multilingual-pack signal; see the comment
+// on validateKokoro) fails validation when Lang is empty, and passes once
+// Lang is provided.
+func TestConfigValidateKokoroMultilingualRequiresLang(t *testing.T) {
+	config := validKokoroConfig(t)
+	config.Kokoro.Lexicon = tempFile(t, "lexicon.txt")
+	config.Kokoro.Lang = ""
+
+	err := config.Validate()
+	if err == nil {
+		t.Fatal("multilingual Kokoro config (lexicon set) without lang should fail validation")
+	}
+	if !strings.Contains(err.Error(), "kokoro lang is required") {
+		t.Errorf("expected kokoro lang requirement error; got: %s", err.Error())
+	}
+}
+
+func TestConfigValidateKokoroMultilingualWithLangPasses(t *testing.T) {
+	config := validKokoroConfig(t)
+	config.Kokoro.Lexicon = tempFile(t, "lexicon.txt")
+	config.Kokoro.Lang = "es"
+
+	if err := config.Validate(); err != nil {
+		t.Fatalf("multilingual Kokoro config with lang set should validate: %v", err)
 	}
 }
 

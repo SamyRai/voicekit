@@ -10,6 +10,14 @@ type ASRService interface {
 	// ProcessAudioChunk processes a chunk of audio for streaming ASR
 	ProcessAudioChunk(ctx context.Context, sessionID string, audio []float32) (*Transcription, error)
 
+	// FinishStream finalizes the streaming session identified by sessionID,
+	// flushing any buffered audio through a final decode and returning a
+	// non-partial transcription. Callers invoke it at their own utterance
+	// boundary instead of waiting for a VAD endpoint. Finalizing a session
+	// that does not exist or has no buffered audio yields an empty,
+	// non-partial transcription rather than an error.
+	FinishStream(ctx context.Context, sessionID string) (*Transcription, error)
+
 	// RegisterModel registers a new ASR model
 	RegisterModel(model ASRModel) error
 

@@ -320,6 +320,19 @@ func validateKokoro(config KokoroConfig) []error {
 	})
 	errs = append(errs, requireDir("kokoro data dir", config.DataDir)...)
 	errs = append(errs, validateOptionalFile("kokoro lexicon", config.Lexicon)...)
+
+	// KokoroConfig (and the upstream sherpa-onnx OfflineTtsKokoroModelConfig it
+	// maps to) has no explicit "multilingual voice pack" flag, so a Lexicon path
+	// is used as the multilingual signal: Kokoro's stock monolingual English
+	// pack works with both Lexicon and Lang empty, while multilingual packs
+	// (Kokoro >= v1.0) ship a per-language lexicon and require an explicit Lang
+	// (e.g. "es", "fr-fr") for correct phonemization — Kokoro rejects synthesis
+	// without it. If this proxy ever misfires (e.g. a monolingual config that
+	// still sets Lexicon), replace it with a real multilingual flag instead of
+	// loosening this check.
+	if config.Lexicon != "" && config.Lang == "" {
+		errs = append(errs, fmt.Errorf("kokoro lang is required when lexicon is set (multilingual Kokoro voice packs require an explicit language, e.g. \"es\" or \"fr-fr\")"))
+	}
 	return errs
 }
 

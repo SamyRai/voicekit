@@ -87,6 +87,72 @@ Current product gaps:
   comparison harness beyond deterministic fixture metrics and local SDK
   benchmark coverage.
 
+## Engine Track — Streaming Completeness & Capability Exposure (2026-07)
+
+Complements the product initiatives below. These are the core Sherpa-backed
+engine priorities: close the streaming lifecycle, expose high-value capabilities
+the `sherpa-onnx-go` v1.13.4 binding already provides but voicekit does not yet
+wrap, and pay down validation/DX debt surfaced by the first real downstream
+integration (asr_server). Full sprint task list in `todo.md`.
+
+### Integration-driven findings (verified on real models, 2026-07)
+
+- **The finalization gap is real at the interface.** `types.ASRService` has no
+  `FinishStream`. `finalizeTranscription` (asr/service.go:303) +
+  `finalizableModel.FinishAudio` exist internally but are unexposed, so a
+  downstream caller must force a final on its own utterance boundary and can
+  present an empty or partial hypothesis as the final result. This also makes
+  online WER unmeasurable end to end.
+- **Provider-name footgun.** `silero` vs `silero_vad` (and similar) silently
+  falls through to a nil detector instead of erroring — a downstream native
+  smoke test passed without ever loading Silero. Provider names need validation
+  or aliasing with a loud error on the unknown case.
+- **Multilingual Kokoro needs `lang`/`lexicon`.** Kokoro ≥ v1.0 rejects synthesis
+  without one; the config carries the fields but nothing guides or validates them.
+- **Nemotron online decoding is greedy-only** (no hotwords). Hotword/glossary
+  support must be explicit about model-family limits.
+
+### Confirmed wrappable now (Go binding present; voicekit does not wrap)
+
+Verified against the sherpa-onnx-go v1.13.4 binding source: `KeywordSpotter`,
+`OnlinePunctuation`/`OfflinePunctuation`, `SpeechDenoiser`/`OfflineSpeechDenoiser`,
+`SpokenLanguageIdentification`, `SourceSeparation`, `AudioTagging`, and
+**streaming TTS** via the `GeneratedAudio` per-chunk callback
+(`_cgoGeneratedAudioCallback`). NOT in the Go binding (C++-core only — needs a
+`sherpa-onnx-go` binding contribution, do not plan as a simple wrap):
+**QNN/RKNN/Ascend NPU providers** (Go exposes only cpu/cuda/coreml).
+
+### Prioritized objectives
+
+**P0 — streaming lifecycle + validation**
+1. Public `FinishStream(ctx, sessionID) (*Transcription, error)` on
+   `types.ASRService` + `asr.Service`, backed by a real
+   `SherpaOnlineModel.FinishAudio` (`InputFinished` + flush-decode). Deterministic
+   non-empty finals; unblocks downstream WER. (Breaking interface change — allowed.)
+2. `make fetch-test-models` + env-gated native smoke across ASR/VAD/TTS/
+   diarization/speaker, digest-pinned off `testdata/model_matrix.yaml` (the
+   pattern proven downstream in asr_server). Closes the open `todo.md` item.
+3. Provider-name validation/aliasing (VAD/TTS/ASR) — reject or normalize unknown
+   providers loudly; validate multilingual-Kokoro `lang`/`lexicon`.
+
+**P1 — capability exposure (confirmed wrappable)**
+4. Streaming TTS (`StreamingSynthesizer` over the GeneratedAudio callback;
+   chunked, interruptible).
+5. Punctuation restoration (post-ASR normalizer).
+6. Keyword spotting (streaming wake-word/hotword).
+7. Spoken language identification (auto language routing).
+
+**P2 — engine hardening**
+8. Speech denoiser preprocessing stage (optional, before VAD/ASR).
+9. Multi-online-model hosting (relax the single-backend-per-instance constraint
+   so one service can host more than one online model).
+10. Recognizer pooling/warmup — only after a benchmark shows the init cost.
+11. `evaluation` DER metric; speaker DB retention/eviction (existing stretch).
+
+Deferred/strategic (see Later): source separation, audio tagging, overlap-aware
+diarization, NPU providers (needs binding work), SIMD resampling, embedding
+quantization, capture adapters, LLM analyzer adapters, searchable meeting memory.
+
 ## Top 10 Initiatives
 
 ### 1. Meeting Intelligence Domain
@@ -295,6 +361,9 @@ Effort: Medium to Large.
 
 ### Now
 
+- **Engine Track P0** (see the section above): ship public `FinishStream`,
+  `make fetch-test-models` + native smoke, and provider-name validation. These
+  are the core-engine gaps a real downstream integration hit first.
 - Expand evaluation fixtures toward realistic meetings, noisy calls,
   multilingual calls, and overlapping speakers.
 - Add DER-focused diarization evaluation and latency/memory benchmark reports.

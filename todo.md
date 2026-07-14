@@ -1,5 +1,44 @@
 # VoiceKit Foundation Sprint Todo
 
+## Engine Sprint (2026-07, ACTIVE) — streaming completeness & capability exposure
+
+Theme: close the streaming lifecycle, expose high-value sherpa capabilities the
+`sherpa-onnx-go` v1.13.4 binding already provides, and pay down validation/DX
+debt surfaced by the first real downstream integration (asr_server). Rationale,
+findings, and the confirmed-wrappable-vs-not audit are in `PRODUCT_ROADMAP_2026.md`
+(Engine Track). Breaking interface changes are permitted.
+
+P0 — streaming lifecycle + validation
+- [x] Public `FinishStream(ctx, sessionID)` on `types.ASRService` + `asr.Service`;
+  real `SherpaOnlineModel.FinishAudio` (`InputFinished` + flush-decode) with a
+  hermetic + env-gated test proving a non-empty final. (Unblocks asr_server's
+  online finalization + WER.)
+- [x] `make fetch-test-models` (digest-pinned off `testdata/model_matrix.yaml`) +
+  env-gated native smoke across ASR/VAD/TTS/diarization/speaker; wire into CI.
+  (Supersedes the "make fetch-test-models" stretch item below.)
+- [x] Provider-name validation/aliasing (VAD/TTS/ASR) — reject or normalize
+  unknown providers loudly (fixes the `silero` vs `silero_vad` silent-nil
+  footgun); validate multilingual-Kokoro `lang`/`lexicon` before synthesis.
+
+P1 — capability exposure (confirmed present in the sherpa-onnx-go v1.13.4 binding)
+- [ ] Streaming TTS `StreamingSynthesizer` over the `GeneratedAudio` per-chunk
+  callback (chunked, interruptible via context).
+- [ ] Punctuation restoration wrapper (`Online`/`OfflinePunctuation`) as a
+  post-ASR normalizer.
+- [ ] Keyword spotting wrapper (`KeywordSpotter`) for streaming wake-word/hotword.
+- [ ] Spoken language identification wrapper (`SpokenLanguageIdentification`) for
+  auto language routing.
+
+P2 — engine hardening
+- [ ] Speech denoiser preprocessing stage (`OfflineSpeechDenoiser`/GTCRN),
+  optional before VAD/ASR.
+- [ ] Multi-online-model hosting (relax single-backend-per-instance).
+- [ ] Recognizer pooling/warmup — only after a benchmark shows the init cost.
+- [ ] `evaluation` DER metric; speaker DB retention/eviction (from the stretch below).
+
+Not a simple wrap (needs `sherpa-onnx-go` binding work — Go exposes only
+cpu/cuda/coreml): QNN/RKNN/Ascend NPU providers — deferred, not in this sprint.
+
 ## Hardening & currency sprint (July 2026)
 
 - [x] Remove inert metrics snapshot pool; clarify energy-VAD mean-square; iterative union-find.
@@ -9,7 +48,8 @@
 - [x] Recommended model matrix (`testdata/model_matrix.yaml`, Nemotron streaming default).
 - [x] Decode FLAC/MP3/Ogg-Vorbis via pure-Go libraries (AAC/M4A remain unsupported).
 - [x] Race regression for concurrent online ASR process vs close.
-- [ ] `make fetch-test-models` + broader env-gated native smoke (needs pinned model URLs).
+- [x] `make fetch-test-models` + broader env-gated native smoke (tooling shipped in
+  the Engine Sprint P0; matrix URL/digest pinning remains a data task).
 - [ ] Stretch: speaker DB retention/eviction; measured performance pass.
 
 ## Baseline and Reference

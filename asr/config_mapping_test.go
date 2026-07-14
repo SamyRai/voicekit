@@ -271,3 +271,108 @@ func TestValidateOnlineRequiresModel(t *testing.T) {
 		t.Errorf("expected online tokens requirement; got: %s", err.Error())
 	}
 }
+
+// TestValidateVADAcceptsProviderAliases proves that validateVAD (the
+// Config.Validate() path) normalizes short/aliased VAD provider names
+// case-insensitively to their canonical constants. It uses an empty
+// VADModelPath so the assertion is on the "VAD model path is required for
+// provider <canonical>" error (which only fires once the provider has been
+// recognized as a sherpa provider) rather than on the "unsupported VAD
+// provider" default-case error an unrecognized alias would produce; this
+// keeps the test hermetic (no native sherpa model construction).
+func TestValidateVADAcceptsProviderAliases(t *testing.T) {
+	cases := []struct {
+		alias string
+		want  string
+	}{
+		{"silero", VADProviderSilero},
+		{"SILERO", VADProviderSilero},
+		{"ten", VADProviderTen},
+		{"TEN", VADProviderTen},
+	}
+	for _, tc := range cases {
+		t.Run(tc.alias, func(t *testing.T) {
+			c := offlineBaseConfig()
+			c.Offline = OfflineConfig{ModelFamily: OfflineFamilySenseVoice, ModelPath: "model"}
+			c.VADProvider = tc.alias
+			c.VADModelPath = ""
+			err := c.Validate()
+			if err == nil {
+				t.Fatalf("expected validation error for missing VAD model path with alias %q", tc.alias)
+			}
+			if strings.Contains(err.Error(), "unsupported VAD provider") {
+				t.Fatalf("alias %q was not normalized before dispatch: %v", tc.alias, err)
+			}
+			if !strings.Contains(err.Error(), "VAD model path is required for provider "+tc.want) {
+				t.Errorf("expected normalized provider %q in error; got: %s", tc.want, err.Error())
+			}
+			if c.VADProvider != tc.want {
+				t.Errorf("VADProvider after validate = %q, want normalized %q", c.VADProvider, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateVADRejectsUnknownProvider proves validateVAD still hard-errors
+// on unsupported VAD providers after alias normalization.
+func TestValidateVADRejectsUnknownProvider(t *testing.T) {
+	c := offlineBaseConfig()
+	c.Offline = OfflineConfig{ModelFamily: OfflineFamilySenseVoice, ModelPath: "model"}
+	c.VADProvider = "bogus"
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for unsupported VAD provider")
+	}
+	if !strings.Contains(err.Error(), `unsupported VAD provider "bogus"`) {
+		t.Errorf("expected unsupported-provider error mentioning %q; got: %s", "bogus", err.Error())
+	}
+}
+
+// TestNewVADServiceAcceptsProviderAliases proves the exported NewVADService
+// constructor (a public bypass of Config.Validate()) also normalizes aliases
+// case-insensitively before dispatch. It uses an empty ModelPath so the
+// assertion is on newSherpaVAD's "VAD model path is required for provider
+// <canonical>" error rather than on native sherpa VAD construction, keeping
+// the test hermetic.
+func TestNewVADServiceAcceptsProviderAliases(t *testing.T) {
+	cases := []struct {
+		alias string
+		want  string
+	}{
+		{"silero", VADProviderSilero},
+		{"SILERO", VADProviderSilero},
+		{"ten", VADProviderTen},
+		{"TEN", VADProviderTen},
+	}
+	for _, tc := range cases {
+		t.Run(tc.alias, func(t *testing.T) {
+			cfg := &VADConfig{Provider: tc.alias}
+			_, err := NewVADService(cfg)
+			if err == nil {
+				t.Fatalf("expected error for alias %q with no VAD model path", tc.alias)
+			}
+			if strings.Contains(err.Error(), "unsupported VAD provider") {
+				t.Fatalf("alias %q was not normalized before dispatch: %v", tc.alias, err)
+			}
+			if !strings.Contains(err.Error(), "VAD model path is required for provider "+tc.want) {
+				t.Errorf("expected normalized provider %q in error; got: %s", tc.want, err.Error())
+			}
+			if cfg.Provider != tc.want {
+				t.Errorf("Provider after NewVADService = %q, want normalized %q", cfg.Provider, tc.want)
+			}
+		})
+	}
+}
+
+// TestNewVADServiceRejectsUnknownProvider proves NewVADService still
+// hard-errors on unsupported VAD providers after alias normalization.
+func TestNewVADServiceRejectsUnknownProvider(t *testing.T) {
+	cfg := &VADConfig{Provider: "bogus"}
+	_, err := NewVADService(cfg)
+	if err == nil {
+		t.Fatal("expected error for unsupported VAD provider")
+	}
+	if !strings.Contains(err.Error(), `unsupported VAD provider "bogus"`) {
+		t.Errorf("expected unsupported-provider error mentioning %q; got: %s", "bogus", err.Error())
+	}
+}

@@ -2,6 +2,7 @@ package asr
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/SamyRai/voicekit/types"
@@ -68,12 +69,32 @@ func defaultVADConfig() *VADConfig {
 	}
 }
 
-// NewVADService creates a VAD service for the named provider.
+// normalizeVADProvider resolves common short provider names to their canonical
+// VAD provider constants, case-insensitively (mirrors the online model-type
+// aliasing in sherpa_online.go). Unrecognized values are returned unchanged so
+// the caller's switch/default still hard-errors on truly unsupported
+// providers, with the original (un-normalized) value in the error message.
+func normalizeVADProvider(provider string) string {
+	switch strings.ToLower(provider) {
+	case "silero":
+		return VADProviderSilero
+	case "ten":
+		return VADProviderTen
+	default:
+		return provider
+	}
+}
+
+// NewVADService creates a VAD service for the named provider. This is an
+// exported constructor that callers can use directly, bypassing
+// asr.Config.Validate() — provider aliasing is applied here too so both paths
+// accept the same short names.
 func NewVADService(config *VADConfig) (*VADService, error) {
 	if config == nil {
 		config = defaultVADConfig()
 	}
 	applyVADDefaults(config)
+	config.Provider = normalizeVADProvider(config.Provider)
 
 	var detector VADDetector
 	var err error

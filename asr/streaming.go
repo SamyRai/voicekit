@@ -106,6 +106,23 @@ func (m *StreamingManager) GetState(sessionID string) (*types.StreamingState, er
 	return session.State, nil
 }
 
+// stateForSession returns the streaming state for an existing session, marking
+// it active so an in-flight finalization is not concurrently reaped by the idle
+// cleanup. It does not create a session; the second return value reports whether
+// the session exists.
+func (m *StreamingManager) stateForSession(sessionID string) (*types.StreamingState, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists {
+		return nil, false
+	}
+	session.LastActivity = time.Now()
+	session.State.LastActivity = session.LastActivity
+	return session.State, true
+}
+
 // RemoveSession removes a streaming session
 func (m *StreamingManager) RemoveSession(sessionID string) error {
 	m.mu.Lock()

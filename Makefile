@@ -10,11 +10,19 @@ GOLANGCI_LINT_VERSION_RAW := $(patsubst v%,%,$(GOLANGCI_LINT_VERSION))
 GO_BIN := $(shell go env GOPATH)/bin
 
 .PHONY: verify forbidden-files mod-verify fmt-check tidy-check tools lint test vet race \
+	fetch-test-models \
 	bench bench-all bench-audio bench-speaker bench-diarization bench-memory bench-load \
 	bench-report bench-compare bench-profile bench-memprofile bench-clean bench-comprehensive \
 	bench-help
 
 verify: forbidden-files mod-verify fmt-check tidy-check lint vet test race
+
+# Fetch native test models listed in testdata/model_matrix.yaml into
+# $VK_TEST_MODEL_DIR (default /tmp/voicekit-models) for the env-gated native
+# smoke tests. Only entries with a pinned url are downloaded; set FETCH_DRY_RUN=1
+# to list actions without downloading.
+fetch-test-models:
+	@scripts/fetch-test-models.sh
 
 forbidden-files:
 	@scripts/check-forbidden-files.sh
@@ -132,3 +140,4 @@ bench-help:
 	@echo "  bench-profile     - Write CPU profile into $(PROFILE_DIR)"
 	@echo "  bench-memprofile  - Write memory profile into $(PROFILE_DIR)"
 	@echo "  bench-clean       - Remove VoiceKit benchmark/profile temp directories"
+	@echo "  fetch-test-models - Download pinned native test models into \$$VK_TEST_MODEL_DIR"
