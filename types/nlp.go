@@ -17,6 +17,10 @@ type KeywordSpotter interface {
 	// Spot feeds an audio chunk for a session and returns a keyword detected on
 	// this step, or nil when none fired.
 	Spot(ctx context.Context, sessionID string, audio []float32) (*KeywordMatch, error)
+	// EndSession closes the streaming detection state for a session, bounding
+	// native memory. Ending an unknown session is a no-op; a later Spot with the
+	// same sessionID starts a fresh stream.
+	EndSession(sessionID string) error
 	Close() error
 }
 

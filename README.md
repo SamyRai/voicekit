@@ -128,6 +128,31 @@ VoiceKit implements a modular, layered architecture for voice processing operati
 - **Family-Specific Config**: Supported Sherpa families have explicit config blocks instead of one flat path bag
 - **Resource Lifecycle**: Native TTS resources are owned by the synthesizer and closed through `VoiceKit.Close`
 
+#### Streaming and Auxiliary Capabilities
+
+Optional Sherpa-backed capabilities that wrap binding surfaces beyond the core
+services. Each has a provider-neutral interface in `types`, a standalone
+constructor re-exported at the root, and an env-gated example under `examples/`.
+
+- **Streaming ASR finalization**: `ASRService.FinishStream(ctx, sessionID)` forces
+  a final hypothesis (native `InputFinished` + flush-decode) at a caller-chosen
+  utterance boundary instead of waiting for a VAD endpoint.
+- **Streaming TTS**: `tts.SherpaStreamingSynthesizer` (`voicekit.NewStreamingSynthesizer`)
+  implements `types.StreamingSynthesizer`, delivering audio chunks via a sink
+  callback (return `false` to interrupt) with progress. Example: `examples/tts_streaming`.
+- **Punctuation restoration**: `asr.SherpaPunctuation` (`voicekit.NewPunctuation`)
+  implements `types.Punctuation`, a post-ASR normalizer over Sherpa OfflinePunctuation.
+  Example: `examples/punctuation`.
+- **Keyword spotting**: `asr.SherpaKeywordSpotter` (`voicekit.NewKeywordSpotter`)
+  implements `types.KeywordSpotter` with per-session streaming detection.
+  Example: `examples/keyword_spotting`.
+- **Spoken language identification**: `asr.SherpaLanguageIdentifier`
+  (`voicekit.NewLanguageIdentifier`) implements `types.LanguageIdentifier` over a
+  complete audio segment. Example: `examples/language_id`.
+- **Provider aliasing / validation**: VAD provider names accept aliases
+  (`silero`→`silero_vad`, `ten`→`ten_vad`); multilingual Kokoro requires an explicit
+  `lang` when a lexicon is set. Unknown providers still fail loudly.
+
 ## Technical Implementation Details
 
 ### Memory Management Strategy

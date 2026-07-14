@@ -155,6 +155,30 @@ type SynthesisRequest = types.SynthesisRequest
 // SynthesizedSpeech contains generated normalized PCM samples.
 type SynthesizedSpeech = types.SynthesizedSpeech
 
+// StreamingSynthesizer synthesizes speech incrementally over an audio-chunk sink.
+type StreamingSynthesizer = types.StreamingSynthesizer
+
+// AudioChunk is a contiguous span of freshly generated PCM audio.
+type AudioChunk = types.AudioChunk
+
+// AudioChunkFunc receives generated audio chunks; returning false stops synthesis.
+type AudioChunkFunc = types.AudioChunkFunc
+
+// Punctuation restores punctuation and casing in raw ASR transcript text.
+type Punctuation = types.Punctuation
+
+// KeywordSpotter detects configured keywords/wake-words in streaming audio.
+type KeywordSpotter = types.KeywordSpotter
+
+// KeywordMatch is a keyword detected in a stream.
+type KeywordMatch = types.KeywordMatch
+
+// LanguageIdentifier identifies the spoken language of an audio segment.
+type LanguageIdentifier = types.LanguageIdentifier
+
+// LanguageResult is the detected spoken language of an audio segment.
+type LanguageResult = types.LanguageResult
+
 // Close releases all resources held by VoiceKit
 func (vk *VoiceKit) Close() error {
 	var errs []error
@@ -335,6 +359,26 @@ func NewDiarizationIntegrator(config *diarization.DiarizationConfig, manager *di
 // NewSpeakerParser creates a standalone speaker audio parser
 func NewSpeakerParser() *speaker.AudioParser {
 	return speaker.NewAudioParser()
+}
+
+// NewStreamingSynthesizer creates a standalone streaming (chunked) TTS synthesizer.
+func NewStreamingSynthesizer(config *voicetts.Config) (*voicetts.SherpaStreamingSynthesizer, error) {
+	return voicetts.NewSherpaStreamingSynthesizer(config)
+}
+
+// NewPunctuation creates a standalone post-ASR punctuation restorer.
+func NewPunctuation(config *voiceasr.PunctuationConfig) (*voiceasr.SherpaPunctuation, error) {
+	return voiceasr.NewSherpaPunctuation(config)
+}
+
+// NewKeywordSpotter creates a standalone streaming keyword/wake-word spotter.
+func NewKeywordSpotter(config *voiceasr.KeywordSpotterConfig) (*voiceasr.SherpaKeywordSpotter, error) {
+	return voiceasr.NewSherpaKeywordSpotter(config)
+}
+
+// NewLanguageIdentifier creates a standalone spoken-language identifier.
+func NewLanguageIdentifier(config *voiceasr.LanguageIDConfig) (*voiceasr.SherpaLanguageIdentifier, error) {
+	return voiceasr.NewSherpaLanguageIdentifier(config)
 }
 
 // speakerDatabaseAdapter adapts speaker.Manager to diarization.SpeakerDatabase interface

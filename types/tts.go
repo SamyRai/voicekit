@@ -29,7 +29,7 @@ type SynthesizedSpeech struct {
 // StreamingSynthesizer synthesizes speech incrementally, delivering audio in
 // chunks as they are produced so callers can begin playback before synthesis
 // completes. It also returns the fully assembled speech. Synthesis stops early
-// if the context is cancelled or the sink returns false (barge-in).
+// if the context is canceled or the sink returns false (barge-in).
 type StreamingSynthesizer interface {
 	SynthesizeStream(ctx context.Context, request SynthesisRequest, sink AudioChunkFunc) (*SynthesizedSpeech, error)
 	Close() error

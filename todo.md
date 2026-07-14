@@ -21,12 +21,12 @@ P0 — streaming lifecycle + validation
   footgun); validate multilingual-Kokoro `lang`/`lexicon` before synthesis.
 
 P1 — capability exposure (confirmed present in the sherpa-onnx-go v1.13.4 binding)
-- [ ] Streaming TTS `StreamingSynthesizer` over the `GeneratedAudio` per-chunk
+- [x] Streaming TTS `StreamingSynthesizer` over the `GeneratedAudio` per-chunk
   callback (chunked, interruptible via context).
-- [ ] Punctuation restoration wrapper (`Online`/`OfflinePunctuation`) as a
+- [x] Punctuation restoration wrapper (`Online`/`OfflinePunctuation`) as a
   post-ASR normalizer.
-- [ ] Keyword spotting wrapper (`KeywordSpotter`) for streaming wake-word/hotword.
-- [ ] Spoken language identification wrapper (`SpokenLanguageIdentification`) for
+- [x] Keyword spotting wrapper (`KeywordSpotter`) for streaming wake-word/hotword.
+- [x] Spoken language identification wrapper (`SpokenLanguageIdentification`) for
   auto language routing.
 
 P2 — engine hardening
