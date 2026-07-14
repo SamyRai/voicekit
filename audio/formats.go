@@ -82,11 +82,16 @@ func DefaultM4AConfig() *AudioConfig {
 	}
 }
 
-// SupportedFormats returns all supported audio formats
+// SupportedFormats returns all formats VoiceKit can decode. WAV/PCM are
+// uncompressed; FLAC/MP3/Ogg-Vorbis are decoded with pure-Go libraries. AAC/M4A
+// are intentionally excluded (no maintained pure-Go decoder).
 func SupportedFormats() []AudioFormat {
 	return []AudioFormat{
 		FormatWAV,
 		FormatPCM,
+		FormatFLAC,
+		FormatMP3,
+		FormatOGG,
 	}
 }
 
@@ -221,9 +226,13 @@ func (c *AudioConfig) Validate() error {
 		errs = append(errs, fmt.Errorf("channels must not exceed 8, got %d", c.Channels))
 	}
 
-	validBitsPerSample := map[int]bool{8: true, 16: true, 24: true, 32: true}
-	if !validBitsPerSample[c.BitsPerSample] {
-		errs = append(errs, fmt.Errorf("bits per sample must be 8, 16, 24, or 32, got %d", c.BitsPerSample))
+	// Compressed formats carry their own bit depth in the stream, so BitsPerSample
+	// is only meaningful (and required) for uncompressed WAV/PCM input.
+	if !c.Format.IsCompressed() {
+		validBitsPerSample := map[int]bool{8: true, 16: true, 24: true, 32: true}
+		if !validBitsPerSample[c.BitsPerSample] {
+			errs = append(errs, fmt.Errorf("bits per sample must be 8, 16, 24, or 32, got %d", c.BitsPerSample))
+		}
 	}
 
 	if c.Format.IsLossy() {

@@ -5,7 +5,10 @@ go 1.26.4
 require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/go-audio/wav v1.1.0
+	github.com/hajimehoshi/go-mp3 v0.3.4
+	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/k2-fsa/sherpa-onnx-go v1.13.4
+	github.com/mewkiz/flac v1.0.13
 	github.com/viktordanov/go-hnswlib v1.4.0
 )
 
@@ -25,6 +28,8 @@ require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/icza/bitio v1.1.0 // indirect
+	github.com/jfreymuth/vorbis v1.0.2 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.4 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4 // indirect
@@ -32,6 +37,8 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
+	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect
+	github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.15.0 // indirect
 	github.com/prometheus/client_model v0.3.0 // indirect

@@ -124,11 +124,17 @@ func TestParseWAVFileWithExtraChunkAndStereoDownmix(t *testing.T) {
 }
 
 func TestSupportedFormatsAreActuallyImplemented(t *testing.T) {
-	if IsSupportedFormat(FormatMP3) {
-		t.Fatal("MP3 should not be advertised as supported without a decoder")
+	// Every advertised format must actually decode; formats without a decoder
+	// (AAC/M4A) must not be advertised.
+	for _, f := range []AudioFormat{FormatWAV, FormatPCM, FormatFLAC, FormatMP3, FormatOGG} {
+		if !IsSupportedFormat(f) {
+			t.Errorf("%s should be advertised as supported", f)
+		}
 	}
-	if !IsSupportedFormat(FormatWAV) || !IsSupportedFormat(FormatPCM) {
-		t.Fatal("WAV and PCM should be supported")
+	for _, f := range []AudioFormat{FormatAAC, FormatM4A} {
+		if IsSupportedFormat(f) {
+			t.Errorf("%s should not be advertised as supported without a decoder", f)
+		}
 	}
 }
 

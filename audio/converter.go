@@ -3,11 +3,15 @@ package audio
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 
 	"github.com/go-audio/wav"
+	"github.com/hajimehoshi/go-mp3"
+	"github.com/jfreymuth/oggvorbis"
+	"github.com/mewkiz/flac"
 )
 
 // Converter handles audio format conversion
@@ -441,32 +445,112 @@ func floatToInt32(sample float32) int32 {
 //
 // Currently supported formats: WAV, PCM (uncompressed only)
 
+// validateDecodedFormat checks a decoded stream's native rate/channels against
+// the caller's expectations. A zero config value means "accept whatever the file
+// declares", matching how the compressed formats carry their own rate/channels.
+func validateDecodedFormat(config *AudioConfig, sampleRate, channels int) error {
+	if config.SampleRate != 0 && config.SampleRate != sampleRate {
+		return fmt.Errorf("decoded sample rate %d does not match config sample rate %d", sampleRate, config.SampleRate)
+	}
+	if config.Channels != 0 && config.Channels != channels {
+		return fmt.Errorf("decoded channel count %d does not match config channels %d", channels, config.Channels)
+	}
+	return nil
+}
+
+// decodeFLAC decodes a FLAC stream (pure Go, no CGO) into interleaved float32
+// samples in [-1, 1].
 func (c *Converter) decodeFLAC(data []byte, config *AudioConfig) ([]float32, error) {
-	return nil, fmt.Errorf("FLAC format not supported - requires libFLAC CGO library. Use WAV or PCM format instead")
+	stream, err := flac.New(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize FLAC decoder: %w", err)
+	}
+	defer stream.Close()
+
+	info := stream.Info
+	if err := validateDecodedFormat(config, int(info.SampleRate), int(info.NChannels)); err != nil {
+		return nil, err
+	}
+	if info.BitsPerSample == 0 || info.BitsPerSample > 32 {
+		return nil, fmt.Errorf("unsupported FLAC bits per sample: %d", info.BitsPerSample)
+	}
+	scale := float32(int64(1) << (info.BitsPerSample - 1))
+
+	samples := make([]float32, 0, info.NSamples*uint64(info.NChannels))
+	for {
+		frame, err := stream.ParseNext()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode FLAC frame: %w", err)
+		}
+		n := len(frame.Subframes[0].Samples)
+		for i := 0; i < n; i++ {
+			for _, subframe := range frame.Subframes {
+				samples = append(samples, float32(subframe.Samples[i])/scale)
+			}
+		}
+	}
+	return samples, nil
 }
 
 func (c *Converter) encodeFLAC(samples []float32, config *AudioConfig) ([]byte, error) {
 	return nil, fmt.Errorf("FLAC encoding not supported - requires libFLAC CGO library. Use WAV format instead")
 }
 
+// decodeMP3 decodes an MP3 stream (pure Go, no CGO) into interleaved float32
+// samples in [-1, 1]. go-mp3 always emits 16-bit little-endian stereo.
 func (c *Converter) decodeMP3(data []byte, config *AudioConfig) ([]float32, error) {
-	return nil, fmt.Errorf("MP3 format not supported - requires libmp3lame CGO library. Use WAV or PCM format instead")
+	decoder, err := mp3.NewDecoder(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize MP3 decoder: %w", err)
+	}
+	if err := validateDecodedFormat(config, decoder.SampleRate(), 2); err != nil {
+		return nil, err
+	}
+
+	raw, err := io.ReadAll(decoder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode MP3 stream: %w", err)
+	}
+	if len(raw)%2 != 0 {
+		return nil, fmt.Errorf("MP3 PCM data is not 16-bit aligned")
+	}
+	n := len(raw) / 2
+	samples := make([]float32, n)
+	for i := 0; i < n; i++ {
+		v := int16(binary.LittleEndian.Uint16(raw[i*2:]))
+		samples[i] = float32(v) / c.config.NormalizeFactor
+	}
+	return samples, nil
 }
 
 func (c *Converter) encodeMP3(samples []float32, config *AudioConfig) ([]byte, error) {
 	return nil, fmt.Errorf("MP3 encoding not supported - requires libmp3lame CGO library. Use WAV format instead")
 }
 
+// decodeOGG decodes an Ogg/Vorbis stream (pure Go, no CGO) into interleaved
+// float32 samples in [-1, 1].
 func (c *Converter) decodeOGG(data []byte, config *AudioConfig) ([]float32, error) {
-	return nil, fmt.Errorf("OGG format not supported - requires libvorbis CGO library. Use WAV or PCM format instead")
+	samples, format, err := oggvorbis.ReadAll(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode Ogg/Vorbis stream: %w", err)
+	}
+	if err := validateDecodedFormat(config, format.SampleRate, format.Channels); err != nil {
+		return nil, err
+	}
+	return samples, nil
 }
 
 func (c *Converter) encodeOGG(samples []float32, config *AudioConfig) ([]byte, error) {
 	return nil, fmt.Errorf("OGG encoding not supported - requires libvorbis CGO library. Use WAV format instead")
 }
 
+// decodeM4A remains unsupported: there is no maintained pure-Go AAC/M4A decoder,
+// and VoiceKit avoids CGO for audio ingestion.
 func (c *Converter) decodeM4A(data []byte, config *AudioConfig) ([]float32, error) {
-	return nil, fmt.Errorf("M4A format not supported - requires Core Audio or ffmpeg CGO library. Use WAV or PCM format instead")
+	return nil, fmt.Errorf("M4A/AAC decoding is not supported (no pure-Go decoder); transcode to WAV, FLAC, MP3, or Ogg first")
 }
 
 func (c *Converter) encodeM4A(samples []float32, config *AudioConfig) ([]byte, error) {
