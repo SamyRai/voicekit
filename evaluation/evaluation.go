@@ -37,6 +37,7 @@ type Report struct {
 	Transcript         TextReport               `json:"transcript"`
 	SpeakerAttribution SpeakerAttributionReport `json:"speaker_attribution"`
 	ActionItems        ClassificationReport     `json:"action_items"`
+	Diarization        *DiarizationReport       `json:"diarization,omitempty"`
 	RealTimeFactor     float64                  `json:"real_time_factor,omitempty"`
 }
 
@@ -81,6 +82,16 @@ func EvaluateMeeting(reference MeetingReference, prediction meeting.Meeting) (Re
 		Transcript:         EvaluateTranscriptText(reference.Transcript, prediction.Transcript),
 		SpeakerAttribution: EvaluateSpeakerAttribution(reference.Transcript, prediction.Transcript),
 		ActionItems:        EvaluateActionItems(reference.Summary.ActionItems, prediction.Summary.ActionItems),
+	}
+
+	referenceSegments := DiarizationSegmentsFromReferenceTurns(reference.Transcript)
+	if len(referenceSegments) > 0 {
+		hypothesisSegments := DiarizationSegmentsFromTranscriptTurns(prediction.Transcript)
+		diarization, err := EvaluateDiarization(referenceSegments, hypothesisSegments, DiarizationOptions{})
+		if err != nil {
+			return Report{}, err
+		}
+		report.Diarization = &diarization
 	}
 	return report, nil
 }
