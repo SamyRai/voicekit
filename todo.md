@@ -30,10 +30,12 @@ P1 — capability exposure (confirmed present in the sherpa-onnx-go v1.13.4 bind
   auto language routing.
 
 P2 — engine hardening
-- [ ] Speech denoiser preprocessing stage (`OfflineSpeechDenoiser`/GTCRN),
-  optional before VAD/ASR.
-- [ ] Multi-online-model hosting (relax single-backend-per-instance).
-- [ ] Recognizer pooling/warmup — only after a benchmark shows the init cost.
+- [x] Speech denoiser preprocessing stage (offline GTCRN/DPDFNet + online
+  streaming; `denoise` package, optional stage in the full pipeline).
+- [x] Multi-online-model hosting: `OnlineModels` + per-session language routing
+  (`SetSessionLanguage`), sticky per-session model binding.
+- [~] Recognizer pooling/warmup — env-gated init/first-chunk benchmarks shipped
+  (`make bench-asr-init`); warmup/pool decision gated on real-model numbers.
 - [x] `evaluation` DER metric; speaker DB retention/eviction (LRU/FIFO + TTL,
   broadened triggers, root-config wiring).
 
