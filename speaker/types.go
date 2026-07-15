@@ -12,12 +12,16 @@ import (
 
 // SpeakerData represents speaker data structure
 type SpeakerData struct {
-	ID          string      `json:"id"`
-	Name        string      `json:"name"`
-	Embeddings  [][]float32 `json:"embeddings"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
-	SampleCount int         `json:"sample_count"`
+	ID         string      `json:"id"`
+	Name       string      `json:"name"`
+	Embeddings [][]float32 `json:"embeddings"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
+	// LastUsedAt is refreshed on every successful IdentifySpeaker/VerifySpeaker
+	// match. It is initialized to CreatedAt at registration and is the sort
+	// key for RetentionLRU.
+	LastUsedAt  time.Time `json:"last_used_at"`
+	SampleCount int       `json:"sample_count"`
 }
 
 // SpeakerDatabaseData represents speaker database structure for JSON serialization
@@ -45,6 +49,12 @@ type Manager struct {
 	dataDir      string
 	logger       Logger
 	maxSpeakers  int // 0 = unlimited; otherwise the retention cap enforced on registration
+	// retentionPolicy selects which speaker is evicted first once maxSpeakers
+	// is exceeded. Defaults to RetentionFIFO (see NewManager).
+	retentionPolicy RetentionPolicy
+	// maxAge, when >0, additionally evicts speakers idle longer than this
+	// (by LastUsedAt), independent of maxSpeakers/retentionPolicy.
+	maxAge time.Duration
 
 	// retentionMu serializes eviction so concurrent registrations do not over-evict.
 	retentionMu sync.Mutex
@@ -69,9 +79,19 @@ type Config struct {
 	Threshold  float32 `json:"threshold"`
 	DataDir    string  `json:"data_dir"`
 	// MaxSpeakers bounds the database size. When >0, registering a new speaker
-	// beyond the cap evicts the oldest speakers (by CreatedAt). 0 means unlimited.
-	MaxSpeakers int    `json:"max_speakers"`
-	Logger      Logger `json:"-"`
+	// beyond the cap evicts speakers chosen by RetentionPolicy. 0 means unlimited.
+	MaxSpeakers int `json:"max_speakers"`
+	// RetentionPolicy selects which speaker is evicted first once MaxSpeakers
+	// is exceeded. Empty defaults to RetentionFIFO (oldest CreatedAt first),
+	// matching the behavior shipped before RetentionPolicy existed.
+	// RetentionLRU evicts the least-recently-used speaker (by LastUsedAt,
+	// refreshed on every successful identify/verify match) first.
+	RetentionPolicy RetentionPolicy `json:"retention_policy"`
+	// MaxAge, when >0, additionally evicts any speaker idle longer than this
+	// (by LastUsedAt), independent of MaxSpeakers/RetentionPolicy. 0 (the
+	// default) disables TTL-based eviction.
+	MaxAge time.Duration `json:"max_age"`
+	Logger Logger        `json:"-"`
 }
 
 // Validate validates speaker configuration
@@ -97,6 +117,17 @@ func (c *Config) Validate() error {
 
 	if c.MaxSpeakers < 0 {
 		return fmt.Errorf("max speakers cannot be negative, got %d", c.MaxSpeakers)
+	}
+
+	switch c.RetentionPolicy {
+	case "", RetentionFIFO, RetentionLRU:
+		// valid
+	default:
+		return fmt.Errorf("invalid retention policy '%s', must be one of: %s, %s", c.RetentionPolicy, RetentionFIFO, RetentionLRU)
+	}
+
+	if c.MaxAge < 0 {
+		return fmt.Errorf("max age cannot be negative, got %s", c.MaxAge)
 	}
 
 	// Validate data directory
@@ -139,6 +170,10 @@ type SpeakerInfo struct {
 	SampleCount int       `json:"sample_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// LastUsedAt is the timestamp of the most recent successful identify or
+	// verify match against this speaker; it is the sort key RetentionLRU
+	// uses to pick eviction victims.
+	LastUsedAt time.Time `json:"last_used_at"`
 }
 
 // DatabaseStats represents database statistics

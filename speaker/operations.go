@@ -93,6 +93,10 @@ func (m *Manager) IdentifySpeakerContext(ctx context.Context, audioData []float3
 		return nil, err
 	}
 
+	if result.Identified() {
+		m.touchLastUsed(result.SpeakerID().String())
+	}
+
 	// Convert domain result to API format
 	return &IdentifyResult{
 		Identified:  result.Identified(),
@@ -159,6 +163,7 @@ func (m *Manager) VerifySpeakerContext(ctx context.Context, speakerID string, au
 
 	if verifyResult.Verified {
 		atomic.AddInt64(&m.verifySuccesses, 1)
+		m.touchLastUsed(verifyResult.SpeakerID)
 	}
 
 	return verifyResult, nil
@@ -192,13 +197,27 @@ func (m *Manager) GetAllSpeakersContext(ctx context.Context) []*SpeakerInfo {
 	// Convert domain SpeakerInfo to API SpeakerInfo
 	result := make([]*SpeakerInfo, len(speakers))
 	for i, speaker := range speakers {
-		result[i] = &SpeakerInfo{
+		info := &SpeakerInfo{
 			ID:          speaker.ID().String(),
 			Name:        speaker.Name().String(),
 			SampleCount: speaker.SampleCount(),
 			CreatedAt:   speaker.CreatedAt(),
 			UpdatedAt:   speaker.UpdatedAt(),
 		}
+
+		// The domain layer reconstructs speakers from stored embeddings on
+		// every read and does not round-trip CreatedAt/UpdatedAt (see
+		// SpeakerDatabaseAdapter.FindByID), and it has no concept of
+		// LastUsedAt at all. Pull the authoritative timestamps directly from
+		// the underlying database so retention (FIFO by CreatedAt, LRU by
+		// LastUsedAt) sorts on real data instead of "now".
+		if data, err := m.database.GetSpeaker(info.ID); err == nil {
+			info.CreatedAt = data.CreatedAt
+			info.UpdatedAt = data.UpdatedAt
+			info.LastUsedAt = data.LastUsedAt
+		}
+
+		result[i] = info
 	}
 
 	return result

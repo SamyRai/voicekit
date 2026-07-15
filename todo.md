@@ -34,7 +34,8 @@ P2 — engine hardening
   optional before VAD/ASR.
 - [ ] Multi-online-model hosting (relax single-backend-per-instance).
 - [ ] Recognizer pooling/warmup — only after a benchmark shows the init cost.
-- [ ] `evaluation` DER metric; speaker DB retention/eviction (from the stretch below).
+- [x] `evaluation` DER metric; speaker DB retention/eviction (LRU/FIFO + TTL,
+  broadened triggers, root-config wiring).
 
 Not a simple wrap (needs `sherpa-onnx-go` binding work — Go exposes only
 cpu/cuda/coreml): QNN/RKNN/Ascend NPU providers — deferred, not in this sprint.

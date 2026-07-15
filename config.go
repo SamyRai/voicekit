@@ -3,9 +3,12 @@ package voicekit
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/SamyRai/voicekit/asr"
+	"github.com/SamyRai/voicekit/denoise"
 	"github.com/SamyRai/voicekit/diarization"
+	"github.com/SamyRai/voicekit/speaker"
 	"github.com/SamyRai/voicekit/tts"
 )
 
@@ -16,6 +19,9 @@ type Config struct {
 	Diarization DiarizationConfig
 	ASR         ASRConfig
 	TTS         TTSConfig
+	// Denoiser is optional; when a GTCRN/DPDFNet model path is set, the full
+	// ProcessAudio pipeline denoises samples before speaker/diarization.
+	Denoiser DenoiserConfig
 }
 
 // AudioConfig represents audio processing configuration
@@ -32,8 +38,19 @@ type SpeakerConfig struct {
 	Provider   string  `json:"provider"`
 	Threshold  float32 `json:"threshold"`
 	DataDir    string  `json:"data_dir"`
-	Logger     Logger  `json:"-"`
+	// MaxSpeakers bounds the speaker database; >0 evicts on overflow by
+	// RetentionPolicy. 0 (default) means unlimited.
+	MaxSpeakers int `json:"max_speakers"`
+	// RetentionPolicy selects the eviction order (empty = FIFO by CreatedAt;
+	// LRU by LastUsedAt).
+	RetentionPolicy speaker.RetentionPolicy `json:"retention_policy"`
+	// MaxAge, when >0, evicts speakers idle longer than this (by LastUsedAt).
+	MaxAge time.Duration `json:"max_age"`
+	Logger Logger        `json:"-"`
 }
+
+// DenoiserConfig is the root-facing alias for the speech-denoiser configuration.
+type DenoiserConfig = denoise.DenoiserConfig
 
 // DiarizationConfig is the root-facing alias for diarization-owned runtime configuration.
 type DiarizationConfig = diarization.DiarizationConfig
@@ -164,6 +181,13 @@ func (c *Config) Validate() error {
 	// Validate TTS config
 	if err := c.TTS.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("TTS config validation failed: %w", err))
+	}
+
+	// Validate the optional denoiser only when a model path is configured.
+	if c.Denoiser.GtcrnModel != "" || c.Denoiser.DpdfNetModel != "" {
+		if err := c.Denoiser.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("denoiser config validation failed: %w", err))
+		}
 	}
 
 	// Cross-validation

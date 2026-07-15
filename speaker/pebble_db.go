@@ -141,12 +141,14 @@ func (p *PebbleSpeakerDatabase) RegisterSpeaker(speakerID, speakerName string, e
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	now := time.Now()
 	speakerData := &SpeakerData{
 		ID:          speakerID,
 		Name:        speakerName,
 		Embeddings:  embeddings,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		LastUsedAt:  now,
 		SampleCount: len(embeddings),
 	}
 

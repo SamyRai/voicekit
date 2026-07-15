@@ -33,6 +33,17 @@ func (m *Manager) GetAllSpeakersEmbeddings() map[string][]float32 {
 
 // RegisterSpeakerEmbedding registers a speaker embedding directly (used by diarization)
 func (m *Manager) RegisterSpeakerEmbedding(speakerID string, embedding []float32) error {
+	if err := m.registerSpeakerEmbeddingLocked(speakerID, embedding); err != nil {
+		return err
+	}
+	// Enforce retention after releasing the registration lock, mirroring
+	// RegisterSpeakerContext, so eviction (which deletes speakers) never runs
+	// while the registration mutex is held. No-op unless a cap/TTL is set.
+	m.enforceRetention(context.Background())
+	return nil
+}
+
+func (m *Manager) registerSpeakerEmbeddingLocked(speakerID string, embedding []float32) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 

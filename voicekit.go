@@ -9,6 +9,7 @@ import (
 
 	voiceasr "github.com/SamyRai/voicekit/asr"
 	"github.com/SamyRai/voicekit/audio"
+	"github.com/SamyRai/voicekit/denoise"
 	"github.com/SamyRai/voicekit/diarization"
 	"github.com/SamyRai/voicekit/speaker"
 	voicetts "github.com/SamyRai/voicekit/tts"
@@ -25,6 +26,7 @@ type VoiceKit struct {
 	asrService     ASRService
 	transcriber    types.Transcriber
 	synthesizer    types.SpeechSynthesizer
+	denoiser       types.SpeechDenoiser
 	metrics        *MetricsCollector
 }
 
@@ -44,12 +46,15 @@ func NewVoiceKit(config *Config) (*VoiceKit, error) {
 	var speakerMgr *speaker.Manager
 	if config.Speaker.ModelPath != "" {
 		speakerConfig := &speaker.Config{
-			ModelPath:  config.Speaker.ModelPath,
-			NumThreads: config.Speaker.NumThreads,
-			Provider:   config.Speaker.Provider,
-			Threshold:  config.Speaker.Threshold,
-			DataDir:    config.Speaker.DataDir,
-			Logger:     config.Speaker.Logger,
+			ModelPath:       config.Speaker.ModelPath,
+			NumThreads:      config.Speaker.NumThreads,
+			Provider:        config.Speaker.Provider,
+			Threshold:       config.Speaker.Threshold,
+			DataDir:         config.Speaker.DataDir,
+			MaxSpeakers:     config.Speaker.MaxSpeakers,
+			RetentionPolicy: config.Speaker.RetentionPolicy,
+			MaxAge:          config.Speaker.MaxAge,
+			Logger:          config.Speaker.Logger,
 		}
 
 		var err error
@@ -77,6 +82,16 @@ func NewVoiceKit(config *Config) (*VoiceKit, error) {
 		FilterLength: 16,
 		UseSIMD:      false,
 	})
+
+	// Optional speech-denoiser preprocessing stage for the full pipeline.
+	var denoiser types.SpeechDenoiser
+	if config.Denoiser.GtcrnModel != "" || config.Denoiser.DpdfNetModel != "" {
+		d, err := denoise.NewSherpaSpeechDenoiser(&config.Denoiser)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create speech denoiser: %w", err)
+		}
+		denoiser = d
+	}
 
 	var diarizationMgr *diarization.Manager
 	if config.Diarization.Enabled {
@@ -133,6 +148,7 @@ func NewVoiceKit(config *Config) (*VoiceKit, error) {
 		asrService:     asrService,
 		transcriber:    transcriber,
 		synthesizer:    synthesizer,
+		denoiser:       denoiser,
 		metrics:        NewMetricsCollector(),
 	}, nil
 }
@@ -179,6 +195,12 @@ type LanguageIdentifier = types.LanguageIdentifier
 // LanguageResult is the detected spoken language of an audio segment.
 type LanguageResult = types.LanguageResult
 
+// SpeechDenoiser suppresses noise in a complete audio buffer.
+type SpeechDenoiser = types.SpeechDenoiser
+
+// StreamingDenoiser suppresses noise incrementally for realtime pipelines.
+type StreamingDenoiser = types.StreamingDenoiser
+
 // Close releases all resources held by VoiceKit
 func (vk *VoiceKit) Close() error {
 	var errs []error
@@ -198,6 +220,11 @@ func (vk *VoiceKit) Close() error {
 	if vk.synthesizer != nil {
 		if err := vk.synthesizer.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("TTS synthesizer close failed: %w", err))
+		}
+	}
+	if vk.denoiser != nil {
+		if err := vk.denoiser.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("speech denoiser close failed: %w", err))
 		}
 	}
 	if vk.diarizationMgr != nil {
@@ -313,17 +340,28 @@ func (vk *VoiceKit) ProcessAudio(audioData []byte, inputConfig *audio.AudioConfi
 
 func (vk *VoiceKit) prepareProcessingAudio(samples []float32, sourceRate int) ([]float32, int, error) {
 	targetRate := vk.config.Audio.SampleRate
-	if sourceRate == targetRate {
-		return samples, sourceRate, nil
+	rate := sourceRate
+	if sourceRate != targetRate {
+		if vk.audioResampler == nil {
+			return nil, 0, fmt.Errorf("audio resampler is not initialized")
+		}
+		resampled, err := vk.audioResampler.Resample(samples, sourceRate, targetRate)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to normalize audio sample rate from %d Hz to %d Hz: %w", sourceRate, targetRate, err)
+		}
+		samples, rate = resampled, targetRate
 	}
-	if vk.audioResampler == nil {
-		return nil, 0, fmt.Errorf("audio resampler is not initialized")
+
+	// Optional denoise stage, applied after resampling and before speaker/diarization.
+	if vk.denoiser != nil {
+		denoised, err := vk.denoiser.Denoise(context.Background(), samples, rate)
+		if err != nil {
+			return nil, 0, fmt.Errorf("speech denoise failed: %w", err)
+		}
+		samples = denoised
 	}
-	resampled, err := vk.audioResampler.Resample(samples, sourceRate, targetRate)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to normalize audio sample rate from %d Hz to %d Hz: %w", sourceRate, targetRate, err)
-	}
-	return resampled, targetRate, nil
+
+	return samples, rate, nil
 }
 
 // NewSpeakerManager creates a standalone speaker recognition manager
@@ -379,6 +417,16 @@ func NewKeywordSpotter(config *voiceasr.KeywordSpotterConfig) (*voiceasr.SherpaK
 // NewLanguageIdentifier creates a standalone spoken-language identifier.
 func NewLanguageIdentifier(config *voiceasr.LanguageIDConfig) (*voiceasr.SherpaLanguageIdentifier, error) {
 	return voiceasr.NewSherpaLanguageIdentifier(config)
+}
+
+// NewSpeechDenoiser creates a standalone offline (whole-buffer) speech denoiser.
+func NewSpeechDenoiser(config *denoise.DenoiserConfig) (*denoise.SherpaSpeechDenoiser, error) {
+	return denoise.NewSherpaSpeechDenoiser(config)
+}
+
+// NewStreamingDenoiser creates a standalone online (per-chunk) speech denoiser.
+func NewStreamingDenoiser(config *denoise.DenoiserConfig) (*denoise.SherpaStreamingDenoiser, error) {
+	return denoise.NewSherpaStreamingDenoiser(config)
 }
 
 // speakerDatabaseAdapter adapts speaker.Manager to diarization.SpeakerDatabase interface

@@ -125,6 +125,11 @@ func NewManager(config *Config) (*Manager, error) {
 		metricsRecorder,
 	)
 
+	retentionPolicy := config.RetentionPolicy
+	if retentionPolicy == "" {
+		retentionPolicy = RetentionFIFO
+	}
+
 	manager := &Manager{
 		// Clean architecture components
 		recognitionUseCase: recognitionUseCase,
@@ -137,11 +142,13 @@ func NewManager(config *Config) (*Manager, error) {
 		vectorIndex: vectorIndexAdapter,
 
 		// Configuration
-		threshold:    config.Threshold,
-		embeddingDim: dim,
-		dataDir:      config.DataDir,
-		logger:       config.Logger,
-		maxSpeakers:  config.MaxSpeakers,
+		threshold:       config.Threshold,
+		embeddingDim:    dim,
+		dataDir:         config.DataDir,
+		logger:          config.Logger,
+		maxSpeakers:     config.MaxSpeakers,
+		retentionPolicy: retentionPolicy,
+		maxAge:          config.MaxAge,
 	}
 
 	// Load speakers into memory manager
