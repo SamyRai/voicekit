@@ -53,6 +53,11 @@ type onlineSession struct {
 	closed bool
 }
 
+// NewSherpaOnlineModel builds a SherpaOnlineModel from the legacy single
+// Config.Online field, deriving the model's name from config.DefaultModel and
+// its language from config.Language (both unaffected by Config.OnlineModels).
+// Multi-model hosting builds models via newSherpaOnlineModelFromOnline
+// instead; see Config.resolvedOnlineModelConfigs and NewService.
 func NewSherpaOnlineModel(config *Config) (*SherpaOnlineModel, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config cannot be nil")
@@ -65,27 +70,52 @@ func NewSherpaOnlineModel(config *Config) (*SherpaOnlineModel, error) {
 		return nil, err
 	}
 
-	recognizerConfig, err := buildOnlineRecognizerConfig(config)
+	oc := config.Online
+	if oc.Name == "" {
+		oc.Name = config.DefaultModel
+	}
+	if oc.Language == "" {
+		oc.Language = config.Language
+	}
+	return newSherpaOnlineModelFromOnline(config, oc)
+}
+
+// newSherpaOnlineModelFromOnline builds a SherpaOnlineModel for a single
+// OnlineConfig entry, sharing base for runtime settings (sample rate,
+// threads, provider, decoding method, quantization). Callers must ensure base
+// has already been defaulted (ApplyDefaults) and that oc.Name/oc.Language are
+// resolved to non-empty values.
+func newSherpaOnlineModelFromOnline(base *Config, oc OnlineConfig) (*SherpaOnlineModel, error) {
+	recognizerConfig, err := buildOnlineRecognizerConfigFor(base, oc)
 	if err != nil {
 		return nil, err
 	}
 	recognizer := sherpa.NewOnlineRecognizer(recognizerConfig)
 	if recognizer == nil {
-		return nil, fmt.Errorf("failed to create Sherpa online recognizer")
+		return nil, fmt.Errorf("failed to create Sherpa online recognizer %q", oc.Name)
 	}
 
 	return &SherpaOnlineModel{
-		name:         config.DefaultModel,
-		language:     config.Language,
-		quantization: config.Quantization,
-		sampleRate:   config.SampleRate,
+		name:         oc.Name,
+		language:     oc.Language,
+		quantization: base.Quantization,
+		sampleRate:   base.SampleRate,
 		recognizer:   &sherpaOnlineRecognizer{recognizer: recognizer},
 		sessions:     make(map[*onlineSession]struct{}),
 	}, nil
 }
 
+// buildOnlineRecognizerConfig maps the legacy single Config.Online field onto
+// the native Sherpa recognizer config.
 func buildOnlineRecognizerConfig(config *Config) (*sherpa.OnlineRecognizerConfig, error) {
-	online := config.Online
+	return buildOnlineRecognizerConfigFor(config, config.Online)
+}
+
+// buildOnlineRecognizerConfigFor maps an arbitrary OnlineConfig entry (either
+// the legacy Config.Online or one Config.OnlineModels item) onto the native
+// Sherpa recognizer config, using config for the runtime settings shared
+// across all online models (sample rate, threads, provider, decoding method).
+func buildOnlineRecognizerConfigFor(config *Config, online OnlineConfig) (*sherpa.OnlineRecognizerConfig, error) {
 	modelConfig := sherpa.OnlineModelConfig{
 		Tokens:        online.TokensPath,
 		NumThreads:    config.NumThreads,

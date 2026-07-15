@@ -11,7 +11,7 @@ GO_BIN := $(shell go env GOPATH)/bin
 
 .PHONY: verify forbidden-files mod-verify fmt-check tidy-check tools lint test vet race \
 	fetch-test-models \
-	bench bench-all bench-audio bench-speaker bench-diarization bench-memory bench-load \
+	bench bench-all bench-audio bench-speaker bench-diarization bench-memory bench-load bench-asr-init \
 	bench-report bench-compare bench-profile bench-memprofile bench-clean bench-comprehensive \
 	bench-help
 
@@ -83,6 +83,11 @@ bench-diarization:
 
 bench-memory:
 	@go test -bench=BufferPool -benchmem -run=^$$ -count=$(BENCH_COUNT) ./audio
+
+# Recognizer init-cost / first-chunk benchmarks. Requires real model files via
+# VOICEKIT_ONLINE_ASR_* env vars (see asr/init_benchmark_test.go); skips otherwise.
+bench-asr-init:
+	@go test -bench='NewSherpaOnlineModel|FirstChunk' -benchmem -run=^$$ -count=$(BENCH_COUNT) ./asr
 
 bench-load:
 	@go test -bench=Concurrent -benchmem -run=^$$ -count=$(BENCH_COUNT) .

@@ -34,8 +34,13 @@ type Logger interface {
 	Errorf(format string, args ...any)
 }
 
-// OnlineConfig owns Sherpa online/streaming model paths.
+// OnlineConfig owns Sherpa online/streaming model paths. Name and Language are
+// only required when this entry is one of several in Config.OnlineModels; the
+// legacy single-model Config.Online path derives them from
+// Config.DefaultModel and Config.Language when left empty.
 type OnlineConfig struct {
+	Name        string `json:"name,omitempty"`
+	Language    string `json:"language,omitempty"`
 	TokensPath  string `json:"tokens_path"`
 	EncoderPath string `json:"encoder_path"`
 	DecoderPath string `json:"decoder_path"`
@@ -86,6 +91,13 @@ type Config struct {
 
 	Online  OnlineConfig  `json:"online"`
 	Offline OfflineConfig `json:"offline"`
+
+	// OnlineModels hosts multiple online/streaming models in one Service, each
+	// routed by StreamingState.Language via SelectModel (see
+	// Service.SetSessionLanguage). Each entry requires a distinct non-empty
+	// Name. When empty, NewService falls back to the single legacy Online
+	// model for backward compatibility.
+	OnlineModels []OnlineConfig `json:"online_models,omitempty"`
 
 	VADProvider           string  `json:"vad_provider"`
 	VADModelPath          string  `json:"vad_model_path"`
@@ -138,6 +150,7 @@ func (c *Config) ApplyDefaults() {
 	c.applyRuntimeDefaults(defaults)
 	c.applyVADDefaults(defaults)
 	c.applyOfflineDefaults(defaults)
+	c.applyOnlineModelsDefaults()
 }
 
 func (c *Config) applyModelDefaults(defaults Config) {
@@ -209,6 +222,17 @@ func (c *Config) applyVADDefaults(defaults Config) {
 	}
 }
 
+// applyOnlineModelsDefaults defaults each OnlineModels entry's Language from
+// the top-level Language when left unset. Name is intentionally left as-is:
+// Validate requires it to be explicit and non-empty for every entry.
+func (c *Config) applyOnlineModelsDefaults() {
+	for i := range c.OnlineModels {
+		if c.OnlineModels[i].Language == "" {
+			c.OnlineModels[i].Language = c.Language
+		}
+	}
+}
+
 func (c *Config) applyOfflineDefaults(defaults Config) {
 	if c.Offline.ModelFamily == "" {
 		c.Offline.ModelFamily = defaults.Offline.ModelFamily
@@ -237,7 +261,11 @@ func (c *Config) Validate() error {
 
 	switch c.Backend {
 	case BackendSherpaOnline:
-		errs = append(errs, c.validateOnline()...)
+		if len(c.OnlineModels) > 0 {
+			errs = append(errs, c.validateOnlineModels()...)
+		} else {
+			errs = append(errs, c.validateOnline()...)
+		}
 	case BackendSherpaOffline:
 		errs = append(errs, c.validateOffline()...)
 	default:
@@ -297,30 +325,76 @@ func (c *Config) validateVAD() []error {
 }
 
 func (c *Config) validateOnline() []error {
+	return validateOnlineConfigPaths("online", c.Online)
+}
+
+// validateOnlineModels validates every Config.OnlineModels entry: each must
+// have a distinct non-empty Name and a valid path set (same shape required of
+// the legacy single Online config).
+func (c *Config) validateOnlineModels() []error {
 	var errs []error
-	online := c.Online
+	seen := make(map[string]struct{}, len(c.OnlineModels))
+	for i, oc := range c.OnlineModels {
+		label := fmt.Sprintf("online model[%d]", i)
+		if oc.Name == "" {
+			errs = append(errs, fmt.Errorf("%s: name is required", label))
+		} else {
+			if _, dup := seen[oc.Name]; dup {
+				errs = append(errs, fmt.Errorf("%s: duplicate model name %q", label, oc.Name))
+			}
+			seen[oc.Name] = struct{}{}
+			label = fmt.Sprintf("online model %q", oc.Name)
+		}
+		errs = append(errs, validateOnlineConfigPaths(label, oc)...)
+	}
+	return errs
+}
+
+// validateOnlineConfigPaths validates the model-path shape shared by the
+// legacy single Online config and every OnlineModels entry.
+func validateOnlineConfigPaths(label string, online OnlineConfig) []error {
+	var errs []error
 	if online.TokensPath == "" {
-		errs = append(errs, fmt.Errorf("online tokens path is required"))
+		errs = append(errs, fmt.Errorf("%s tokens path is required", label))
 	} else if err := requireFile(online.TokensPath); err != nil {
-		errs = append(errs, fmt.Errorf("online tokens path: %w", err))
+		errs = append(errs, fmt.Errorf("%s tokens path: %w", label, err))
 	}
 
 	hasTransducer := online.EncoderPath != "" || online.DecoderPath != "" || online.JoinerPath != ""
 	switch {
 	case hasTransducer:
-		errs = append(errs, requirePathSet("online transducer", map[string]string{
+		errs = append(errs, requirePathSet(label+" transducer", map[string]string{
 			"encoder": online.EncoderPath,
 			"decoder": online.DecoderPath,
 			"joiner":  online.JoinerPath,
 		})...)
 	case online.ModelPath != "":
 		if err := requireFile(online.ModelPath); err != nil {
-			errs = append(errs, fmt.Errorf("online model path: %w", err))
+			errs = append(errs, fmt.Errorf("%s model path: %w", label, err))
 		}
 	default:
-		errs = append(errs, fmt.Errorf("online Sherpa ASR requires transducer encoder/decoder/joiner paths or a single online model path"))
+		errs = append(errs, fmt.Errorf("%s Sherpa ASR requires transducer encoder/decoder/joiner paths or a single online model path", label))
 	}
 	return errs
+}
+
+// resolvedOnlineModelConfigs returns the per-model OnlineConfig entries
+// NewService should build for backend BackendSherpaOnline: one entry per
+// OnlineModels item when set, or a single entry expanded from the legacy
+// Online field (with Name/Language defaulted from DefaultModel/Language)
+// otherwise. Callers must call ApplyDefaults first.
+func (c *Config) resolvedOnlineModelConfigs() []OnlineConfig {
+	if len(c.OnlineModels) > 0 {
+		return c.OnlineModels
+	}
+	oc := c.Online
+	if oc.Name == "" {
+		oc.Name = c.DefaultModel
+	}
+	if oc.Language == "" {
+		oc.Language = c.Language
+	}
+	return []OnlineConfig{oc}
 }
 
 func (c *Config) validateOffline() []error {

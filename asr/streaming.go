@@ -33,6 +33,13 @@ type Session struct {
 	// session's audio buffer or native ASR stream. The manager's mu guards the
 	// sessions map; this guards a single session's mutable state.
 	mu sync.Mutex
+
+	// asrModel and asrModelLanguage bind the session to a single ASR model so a
+	// native stream (State.ASRState) created by one model is never handed to a
+	// different recognizer. The binding is re-evaluated only when the session
+	// language changes (see Service.modelForSession). Guarded by mu.
+	asrModel         Model
+	asrModelLanguage string
 }
 
 // Use StreamingConfig from types package
@@ -117,6 +124,17 @@ func (m *StreamingManager) getOrCreateSession(sessionID string) *Session {
 // GetState gets or creates a streaming state for a session.
 func (m *StreamingManager) GetState(sessionID string) (*types.StreamingState, error) {
 	return m.getOrCreateSession(sessionID).State, nil
+}
+
+// setSessionLanguage sets the language on sessionID's StreamingState,
+// creating the session if it does not exist yet. It holds the session's own
+// mutex so it cannot race with an in-flight ProcessAudioChunk/FinishStream
+// call or idle cleanup on the same session.
+func (m *StreamingManager) setSessionLanguage(sessionID, language string) {
+	session := m.getOrCreateSession(sessionID)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	session.State.Language = language
 }
 
 // sessionForFinalize returns an existing session, marking it active so an

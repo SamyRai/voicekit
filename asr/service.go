@@ -103,20 +103,46 @@ func NewService(config *Config) (*Service, error) {
 	}
 	service.streaming = NewStreamingManager(streamingConfig)
 
-	model, err := NewSherpaOnlineModel(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize Sherpa ASR model: %w", err)
-	}
-	if err := service.RegisterModel(model); err != nil {
-		return nil, fmt.Errorf("failed to register default model: %w", err)
+	// Build one SherpaOnlineModel per resolved online config entry: either
+	// every Config.OnlineModels item, or a single model expanded from the
+	// legacy Config.Online field for backward compatibility.
+	for _, oc := range config.resolvedOnlineModelConfigs() {
+		model, err := newSherpaOnlineModelFromOnline(config, oc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize Sherpa ASR model %q: %w", oc.Name, err)
+		}
+		if err := service.RegisterModel(model); err != nil {
+			return nil, fmt.Errorf("failed to register model %q: %w", oc.Name, err)
+		}
 	}
 
 	if config.Logger != nil {
-		config.Logger.Infof("ASR service initialized with model: %s, quantization: %s, VAD: %s",
-			config.DefaultModel, config.Quantization, config.VADProvider)
+		config.Logger.Infof("ASR service initialized with %d online model(s) (default: %s), quantization: %s, VAD: %s",
+			len(service.models), config.DefaultModel, config.Quantization, config.VADProvider)
 	}
 
 	return service, nil
+}
+
+// SetSessionLanguage sets the language used to route sessionID's subsequent
+// ProcessAudioChunk/FinishStream calls to a language-matching model via
+// SelectModel (see processWithASR/finalizeTranscription). It creates the
+// session if it does not exist yet, so callers may set the language before
+// the first audio chunk arrives. Sessions default to "en" until this is
+// called.
+//
+// This only changes which already-registered model a session's calls are
+// routed to; it does not perform language identification itself (see the
+// planned LanguageIdentifier follow-on).
+func (s *Service) SetSessionLanguage(sessionID, language string) error {
+	if sessionID == "" {
+		return fmt.Errorf("sessionID cannot be empty")
+	}
+	if language == "" {
+		return fmt.Errorf("language cannot be empty")
+	}
+	s.streaming.setSessionLanguage(sessionID, language)
+	return nil
 }
 
 // RegisterModel registers a new ASR model
@@ -218,7 +244,7 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 
 				// Handle VAD events
 				if vadResult.IsEndpoint {
-					transcription, err := s.finalizeTranscription(ctx, sessionID, state)
+					transcription, err := s.finalizeTranscription(ctx, session)
 					if err != nil {
 						return nil, fmt.Errorf("finalization failed: %w", err)
 					}
@@ -234,7 +260,7 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 
 	// Process audio with ASR if buffer is ready
 	if state.Buffer.IsReady() {
-		transcription, err := s.processWithASR(ctx, sessionID, state)
+		transcription, err := s.processWithASR(ctx, session)
 		if err != nil {
 			if s.metrics != nil && s.metrics.ErrorsTotal != nil {
 				s.metrics.ErrorsTotal.Inc()
@@ -293,7 +319,7 @@ func (s *Service) FinishStream(ctx context.Context, sessionID string) (*types.Tr
 		return emptyFinalTranscription(state.Language), nil
 	}
 
-	transcription, err := s.finalizeTranscription(ctx, sessionID, state)
+	transcription, err := s.finalizeTranscription(ctx, session)
 	if err != nil {
 		if s.metrics != nil && s.metrics.ErrorsTotal != nil {
 			s.metrics.ErrorsTotal.Inc()
@@ -315,18 +341,47 @@ func emptyFinalTranscription(language string) *types.Transcription {
 	}
 }
 
-// processWithASR processes audio using the selected ASR model
-func (s *Service) processWithASR(ctx context.Context, sessionID string, state *types.StreamingState) (*types.Transcription, error) {
-	// Select appropriate model
-	model, err := s.SelectModel(state.Language, &types.ModelRequirements{
-		MaxLatency: 500 * time.Millisecond,
-	})
+// modelForSession returns the ASR model bound to the session. It selects a model
+// on first use and re-selects only when the session language changes; on a model
+// change it closes the session's native ASR stream so the new model builds a
+// fresh stream under its own recognizer (a native stream must never cross
+// recognizers). Callers must hold session.mu.
+func (s *Service) modelForSession(session *Session, reqs *types.ModelRequirements) (Model, error) {
+	language := session.State.Language
+
+	if session.asrModel != nil && session.asrModelLanguage == language {
+		if _, ok := s.GetModel(session.asrModel.Name()); ok {
+			return session.asrModel, nil
+		}
+	}
+
+	model, err := s.SelectModel(language, reqs)
 	if err != nil {
 		var exists bool
 		model, exists = s.GetModel(s.config.DefaultModel)
 		if !exists {
 			return nil, fmt.Errorf("default model not available: %w", err)
 		}
+	}
+
+	// A model change orphans any native stream the previous model created for
+	// this session; close it so the new model does not inherit a foreign stream.
+	if session.asrModel != nil && session.asrModel.Name() != model.Name() {
+		_ = closeASRState(session.State)
+	}
+	session.asrModel = model
+	session.asrModelLanguage = language
+	return model, nil
+}
+
+// processWithASR processes audio using the session's bound ASR model.
+func (s *Service) processWithASR(ctx context.Context, session *Session) (*types.Transcription, error) {
+	state := session.State
+	model, err := s.modelForSession(session, &types.ModelRequirements{
+		MaxLatency: 500 * time.Millisecond,
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	// Get audio chunk for processing
@@ -345,18 +400,16 @@ func (s *Service) processWithASR(ctx context.Context, sessionID string, state *t
 	return transcription, nil
 }
 
-// finalizeTranscription finalizes transcription when VAD detects endpoint
-func (s *Service) finalizeTranscription(ctx context.Context, sessionID string, state *types.StreamingState) (*types.Transcription, error) {
-	model, err := s.SelectModel(state.Language, &types.ModelRequirements{
+// finalizeTranscription finalizes transcription when VAD detects an endpoint or
+// FinishStream is called.
+func (s *Service) finalizeTranscription(ctx context.Context, session *Session) (*types.Transcription, error) {
+	state := session.State
+	model, err := s.modelForSession(session, &types.ModelRequirements{
 		MaxLatency:     1 * time.Second,
 		PreferAccuracy: true,
 	})
 	if err != nil {
-		var exists bool
-		model, exists = s.GetModel(s.config.DefaultModel)
-		if !exists {
-			return nil, fmt.Errorf("default model not available: %w", err)
-		}
+		return nil, err
 	}
 
 	chunk := state.Buffer.GetRecentChunk()
