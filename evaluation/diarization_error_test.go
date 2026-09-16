@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SamyRai/voicekit/meeting"
+	"go.glpx.pro/voicekit/meeting"
 )
 
 func TestEvaluateDiarizationRecoversMappingAndScoresBoundaryMiss(t *testing.T) {

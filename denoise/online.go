@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/SamyRai/voicekit/types"
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+	"go.glpx.pro/voicekit/types"
 )
 
 // SherpaStreamingDenoiser implements types.StreamingDenoiser with Sherpa

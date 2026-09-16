@@ -5,11 +5,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/SamyRai/voicekit/asr"
-	"github.com/SamyRai/voicekit/denoise"
-	"github.com/SamyRai/voicekit/diarization"
-	"github.com/SamyRai/voicekit/speaker"
-	"github.com/SamyRai/voicekit/tts"
+	"go.glpx.pro/voicekit/asr"
+	"go.glpx.pro/voicekit/denoise"
+	"go.glpx.pro/voicekit/diarization"
+	"go.glpx.pro/voicekit/speaker"
+	"go.glpx.pro/voicekit/tts"
 )
 
 // Config represents the main configuration for voicekit

@@ -6,8 +6,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/SamyRai/voicekit/types"
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+	"go.glpx.pro/voicekit/types"
 )
 
 // LanguageIDConfig owns Sherpa spoken language identification model

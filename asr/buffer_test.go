@@ -1,7 +1,7 @@
 package asr
 
 import (
-	"github.com/SamyRai/voicekit/types"
+	"go.glpx.pro/voicekit/types"
 	"testing"
 )
 

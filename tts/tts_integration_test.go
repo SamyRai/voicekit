@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/SamyRai/voicekit/types"
+	"go.glpx.pro/voicekit/types"
 )
 
 // TestSherpaOfflineSynthesizerIntegration exercises the Sherpa offline TTS

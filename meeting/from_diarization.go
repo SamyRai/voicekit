@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SamyRai/voicekit/diarization"
+	"go.glpx.pro/voicekit/diarization"
 )
 
 var ErrIntegratedResultRequired = errors.New("integrated diarization result is required")

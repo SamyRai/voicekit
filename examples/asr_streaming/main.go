@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/SamyRai/voicekit"
+	"go.glpx.pro/voicekit"
 )
 
 func main() {

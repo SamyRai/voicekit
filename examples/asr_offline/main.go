@@ -7,8 +7,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/SamyRai/voicekit"
-	"github.com/SamyRai/voicekit/audio"
+	"go.glpx.pro/voicekit"
+	"go.glpx.pro/voicekit/audio"
 )
 
 func main() {

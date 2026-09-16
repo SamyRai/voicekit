@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SamyRai/voicekit/diarization"
+	"go.glpx.pro/voicekit/diarization"
 )
 
 func TestFromIntegratedResultMapsSpeakerSegments(t *testing.T) {

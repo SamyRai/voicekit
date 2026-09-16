@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SamyRai/voicekit/diarization"
+	"go.glpx.pro/voicekit/diarization"
 )
 
 var benchmarkMeetingSink Meeting

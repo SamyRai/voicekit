@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SamyRai/voicekit/types"
+	"go.glpx.pro/voicekit/types"
 )
 
 // fakeStreamingSynthesizer is a hermetic stand-in for the native Sherpa

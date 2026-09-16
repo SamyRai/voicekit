@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SamyRai/voicekit/types"
+	"go.glpx.pro/voicekit/types"
 )
 
 func TestConfigValidateDisabledSkipsModelPaths(t *testing.T) {

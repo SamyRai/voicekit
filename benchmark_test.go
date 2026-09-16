@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SamyRai/voicekit/audio"
+	"go.glpx.pro/voicekit/audio"
 )
 
 var benchmarkBytesSink []byte

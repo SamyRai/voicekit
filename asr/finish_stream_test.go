@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/SamyRai/voicekit/types"
+	"go.glpx.pro/voicekit/types"
 )
 
 // These tests are hermetic: they exercise the public FinishStream entry point

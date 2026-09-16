@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SamyRai/voicekit/types"
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+	"go.glpx.pro/voicekit/types"
 )
 
 // SherpaStreamingSynthesizer implements incremental TTS with Sherpa ONNX,

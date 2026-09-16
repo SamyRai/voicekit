@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SamyRai/voicekit/speaker/application"
-	"github.com/SamyRai/voicekit/speaker/domain"
+	"go.glpx.pro/voicekit/speaker/application"
+	"go.glpx.pro/voicekit/speaker/domain"
 )
 
 // SpeakerData represents speaker data structure

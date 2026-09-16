@@ -1,4 +1,4 @@
-module github.com/SamyRai/voicekit
+module go.glpx.pro/voicekit
 
 go 1.26.4
 

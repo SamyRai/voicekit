@@ -3,7 +3,7 @@ package evaluation
 import (
 	"strings"
 
-	"github.com/SamyRai/voicekit/meeting"
+	"go.glpx.pro/voicekit/meeting"
 )
 
 // DiarizationSegmentsFromReferenceTurns adapts reviewed reference transcript

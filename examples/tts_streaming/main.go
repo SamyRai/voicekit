@@ -10,8 +10,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/SamyRai/voicekit/tts"
-	"github.com/SamyRai/voicekit/types"
+	"go.glpx.pro/voicekit/tts"
+	"go.glpx.pro/voicekit/types"
 )
 
 func main() {

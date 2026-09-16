@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SamyRai/voicekit/asr"
+	"go.glpx.pro/voicekit/asr"
 )
 
 func main() {

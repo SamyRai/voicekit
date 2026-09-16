@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/SamyRai/voicekit/speaker/domain"
+	"go.glpx.pro/voicekit/speaker/domain"
 )
 
 // RegisterSpeaker registers a new speaker with audio sample data for recognition.

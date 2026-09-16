@@ -12,8 +12,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/SamyRai/voicekit/audio"
-	"github.com/SamyRai/voicekit/denoise"
+	"go.glpx.pro/voicekit/audio"
+	"go.glpx.pro/voicekit/denoise"
 )
 
 func main() {

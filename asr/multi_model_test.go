@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SamyRai/voicekit/types"
+	"go.glpx.pro/voicekit/types"
 )
 
 // These tests cover Wave 3d: hosting multiple online models in one Service

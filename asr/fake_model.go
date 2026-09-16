@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/SamyRai/voicekit/types"
+	"go.glpx.pro/voicekit/types"
 )
 
 // FakeModel implements Model for tests and demos. It is never registered by default.

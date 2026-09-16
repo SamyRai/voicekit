@@ -9,7 +9,7 @@ import (
 	"log"
 	"math/rand"
 
-	"github.com/SamyRai/voicekit/indexing"
+	"go.glpx.pro/voicekit/indexing"
 )
 
 // Example demonstrates how to use the generic HNSW vector indexer

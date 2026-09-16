@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/SamyRai/voicekit/evaluation"
-	"github.com/SamyRai/voicekit/meeting"
+	"go.glpx.pro/voicekit/evaluation"
+	"go.glpx.pro/voicekit/meeting"
 )
 
 func main() {

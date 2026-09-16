@@ -407,9 +407,9 @@ import (
     "fmt"
     "log"
 
-    "github.com/SamyRai/voicekit"
-    "github.com/SamyRai/voicekit/audio"
-    "github.com/SamyRai/voicekit/speaker"
+    "go.glpx.pro/voicekit"
+    "go.glpx.pro/voicekit/audio"
+    "go.glpx.pro/voicekit/speaker"
 )
 
 func main() {
@@ -476,7 +476,7 @@ import (
     "log"
     "time"
 
-    "github.com/SamyRai/voicekit"
+    "go.glpx.pro/voicekit"
 )
 
 func main() {
@@ -562,7 +562,7 @@ import (
     "context"
     "log"
 
-    "github.com/SamyRai/voicekit"
+    "go.glpx.pro/voicekit"
 )
 
 func main() {
@@ -603,7 +603,7 @@ import (
     "context"
     "log"
 
-    "github.com/SamyRai/voicekit"
+    "go.glpx.pro/voicekit"
 )
 
 func main() {
@@ -643,7 +643,7 @@ func main() {
 package main
 
 import (
-    "github.com/SamyRai/voicekit/speaker"
+    "go.glpx.pro/voicekit/speaker"
 )
 
 func main() {
@@ -688,7 +688,7 @@ func main() {
 package main
 
 import (
-    "github.com/SamyRai/voicekit/audio"
+    "go.glpx.pro/voicekit/audio"
 )
 
 func main() {
@@ -730,7 +730,7 @@ func main() {
 package main
 
 import (
-    "github.com/SamyRai/voicekit/diarization"
+    "go.glpx.pro/voicekit/diarization"
 )
 
 func main() {
@@ -1560,9 +1560,9 @@ This library is released under the MIT License. See LICENSE file for details.
 
 When migrating from the original ASR server's internal packages:
 
-1. Replace `internal/speaker` imports with `github.com/SamyRai/voicekit/speaker`
-2. Replace `internal/audio` imports with `github.com/SamyRai/voicekit/audio`
-3. Replace `internal/diarization` imports with `github.com/SamyRai/voicekit/diarization`
+1. Replace `internal/speaker` imports with `go.glpx.pro/voicekit/speaker`
+2. Replace `internal/audio` imports with `go.glpx.pro/voicekit/audio`
+3. Replace `internal/diarization` imports with `go.glpx.pro/voicekit/diarization`
 4. Update configuration structures to use `voicekit.Config`
 5. Remove dependencies on `internal/logger` and `internal/config`
 
@@ -1573,5 +1573,5 @@ Example migration:
 import "asr_server/internal/speaker"
 
 // After
-import "github.com/SamyRai/voicekit/speaker"
+import "go.glpx.pro/voicekit/speaker"
 ```

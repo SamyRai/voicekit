@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SamyRai/voicekit/speaker/domain"
+	"go.glpx.pro/voicekit/speaker/domain"
 )
 
 // Logger interface for application layer logging

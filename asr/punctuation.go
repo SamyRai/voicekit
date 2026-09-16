@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/SamyRai/voicekit/types"
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+	"go.glpx.pro/voicekit/types"
 )
 
 // PunctuationConfig owns Sherpa offline punctuation model configuration. The

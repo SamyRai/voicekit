@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/SamyRai/voicekit/meeting"
+	"go.glpx.pro/voicekit/meeting"
 )
 
 var (

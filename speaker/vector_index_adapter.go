@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/SamyRai/voicekit/indexing"
-	"github.com/SamyRai/voicekit/speaker/domain"
+	"go.glpx.pro/voicekit/indexing"
+	"go.glpx.pro/voicekit/speaker/domain"
 )
 
 // VectorIndexAdapter adapts the generic indexing.VectorIndex to the domain.VectorIndex interface

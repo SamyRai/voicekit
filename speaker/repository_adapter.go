@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/SamyRai/voicekit/speaker/domain"
+	"go.glpx.pro/voicekit/speaker/domain"
 )
 
 // SpeakerDatabaseAdapter adapts the existing speaker database to the domain repository interface
