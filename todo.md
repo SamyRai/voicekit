@@ -1,5 +1,19 @@
 # VoiceKit Foundation Sprint Todo
 
+## ASR streaming correctness sprint (2026-09, ACTIVE)
+
+- [x] Feed caller chunks to Sherpa exactly once; remove rolling-window replay and
+  long-chunk truncation from the native online path.
+- [x] Make `FinishStream` flush with `InputFinished` without resubmitting audio.
+- [x] Report cumulative per-utterance online duration instead of chunk-local duration.
+- [x] Give every streaming session its own VAD detector and close it on finalization,
+  removal, timeout, and service shutdown.
+- [x] Make streaming-manager/service shutdown idempotent and reject sessions after close.
+- [ ] Enforce `MaxConcurrentStreams` with a typed capacity error and deterministic
+  admission tests.
+- [ ] Replace token-as-word result mapping with an explicit token contract and only
+  expose word timing after real word segmentation.
+
 ## Engine Sprint (2026-07, ACTIVE) — streaming completeness & capability exposure
 
 Theme: close the streaming lifecycle, expose high-value sherpa capabilities the

@@ -50,6 +50,9 @@ func TestFinishStreamFinalizesBufferedSession(t *testing.T) {
 	if model.finishCalls != 1 {
 		t.Fatalf("expected FinishAudio called exactly once, got %d", model.finishCalls)
 	}
+	if len(model.finishAudio) != 0 {
+		t.Fatalf("FinishStream must flush without replaying buffered audio, got %d samples", len(model.finishAudio))
+	}
 }
 
 func TestFinishStreamFlushesNativeStreamOnce(t *testing.T) {
@@ -89,6 +92,9 @@ func TestFinishStreamFlushesNativeStreamOnce(t *testing.T) {
 	if stream.inputFinishedCount != 1 {
 		t.Fatalf("expected InputFinished called exactly once, got %d", stream.inputFinishedCount)
 	}
+	if len(stream.samples) != len(audio) {
+		t.Fatalf("FinishStream replayed audio: native stream received %d samples, want %d", len(stream.samples), len(audio))
+	}
 }
 
 func TestFinishStreamUnknownSessionReturnsEmptyFinal(t *testing.T) {
@@ -107,6 +113,38 @@ func TestFinishStreamUnknownSessionReturnsEmptyFinal(t *testing.T) {
 	}
 	if final.Text != "" {
 		t.Fatalf("expected empty text for an unknown session, got %q", final.Text)
+	}
+}
+
+func TestFinishStreamWithoutAcceptedSpeechResetsSessionVAD(t *testing.T) {
+	service := newTestService()
+	defer service.Close()
+
+	session, err := service.streaming.getOrCreateSession("silence-only")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	detector := &recordingVADDetector{}
+	session.mu.Lock()
+	session.vadService = &VADService{detector: detector}
+	if err := session.State.Buffer.Append([]float32{0, 0}); err != nil {
+		session.mu.Unlock()
+		t.Fatalf("buffer silence: %v", err)
+	}
+	session.mu.Unlock()
+
+	final, err := service.FinishStream(context.Background(), "silence-only")
+	if err != nil {
+		t.Fatalf("finish silence-only stream: %v", err)
+	}
+	if final == nil || final.IsPartial || final.Text != "" {
+		t.Fatalf("expected empty final result, got %+v", final)
+	}
+	if !detector.closed {
+		t.Fatal("FinishStream must reset session-owned VAD even when no speech reached ASR")
+	}
+	if session.State.Buffer.Size() != 0 {
+		t.Fatalf("session buffer size = %d, want 0", session.State.Buffer.Size())
 	}
 }
 

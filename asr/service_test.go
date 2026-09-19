@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -227,6 +228,108 @@ func TestASRServiceProcessAudioWithExplicitFakeModel(t *testing.T) {
 	}
 }
 
+func TestASRServiceStreamsEachSampleExactlyOnce(t *testing.T) {
+	recognizer := &fakeOnlineRecognizer{}
+	model := newSherpaOnlineModelForTest(recognizer)
+
+	service := newTestService()
+	service.config.DefaultModel = model.Name()
+	defer service.Close()
+	if err := service.RegisterModel(model); err != nil {
+		t.Fatalf("failed to register model: %v", err)
+	}
+
+	chunks := [][]float32{{1, 2}, {3, 4}, {5, 6}}
+	for _, chunk := range chunks {
+		if _, err := service.ProcessAudioChunk(context.Background(), "exactly-once", chunk); err != nil {
+			t.Fatalf("process chunk %v: %v", chunk, err)
+		}
+	}
+	if _, err := service.FinishStream(context.Background(), "exactly-once"); err != nil {
+		t.Fatalf("finish stream: %v", err)
+	}
+
+	if len(recognizer.streams) != 1 {
+		t.Fatalf("native streams = %d, want 1", len(recognizer.streams))
+	}
+	stream := recognizer.streams[0]
+	if want := []float32{1, 2, 3, 4, 5, 6}; !slices.Equal(stream.samples, want) {
+		t.Fatalf("native samples = %v, want %v", stream.samples, want)
+	}
+	if stream.acceptCount != len(chunks) {
+		t.Fatalf("AcceptWaveform calls = %d, want %d", stream.acceptCount, len(chunks))
+	}
+	if stream.inputFinishedCount != 1 {
+		t.Fatalf("InputFinished calls = %d, want 1", stream.inputFinishedCount)
+	}
+}
+
+func TestASRServiceDoesNotTruncateChunkLargerThanRollingBuffer(t *testing.T) {
+	recognizer := &fakeOnlineRecognizer{}
+	model := newSherpaOnlineModelForTest(recognizer)
+
+	service := newTestService()
+	service.config.DefaultModel = model.Name()
+	defer service.Close()
+	if err := service.RegisterModel(model); err != nil {
+		t.Fatalf("failed to register model: %v", err)
+	}
+
+	audio := make([]float32, service.streaming.config.BufferSize+17)
+	for i := range audio {
+		audio[i] = float32(i + 1)
+	}
+	if _, err := service.ProcessAudioChunk(context.Background(), "long-chunk", audio); err != nil {
+		t.Fatalf("process long chunk: %v", err)
+	}
+	if _, err := service.FinishStream(context.Background(), "long-chunk"); err != nil {
+		t.Fatalf("finish stream: %v", err)
+	}
+
+	if got := recognizer.streams[0].samples; !slices.Equal(got, audio) {
+		t.Fatalf("native recognizer received %d samples, want the complete %d-sample chunk", len(got), len(audio))
+	}
+}
+
+func TestASRServiceUsesOneVADPerSessionAndFeedsIncrementalAudio(t *testing.T) {
+	service := newTestService()
+	defer service.Close()
+	if err := service.RegisterModel(&testModel{name: "fake", language: "en", quantization: "int8"}); err != nil {
+		t.Fatalf("failed to register model: %v", err)
+	}
+
+	config := &VADConfig{Provider: VADProviderEnergy, Threshold: 0.01, SampleRate: 16000}
+	prototypeDetector := &recordingVADDetector{}
+	service.vadConfig = config
+	service.vadPrototype = &VADService{config: config, detector: prototypeDetector}
+
+	firstChunk := []float32{0.5, 0.5}
+	secondChunk := []float32{0.6, 0.6}
+	if _, err := service.ProcessAudioChunk(context.Background(), "session-a", firstChunk); err != nil {
+		t.Fatalf("first session chunk: %v", err)
+	}
+	if _, err := service.ProcessAudioChunk(context.Background(), "session-a", secondChunk); err != nil {
+		t.Fatalf("second session chunk: %v", err)
+	}
+	if _, err := service.ProcessAudioChunk(context.Background(), "session-b", firstChunk); err != nil {
+		t.Fatalf("other session chunk: %v", err)
+	}
+
+	service.streaming.mu.RLock()
+	sessionA := service.streaming.sessions["session-a"]
+	sessionB := service.streaming.sessions["session-b"]
+	service.streaming.mu.RUnlock()
+	if sessionA == nil || sessionB == nil {
+		t.Fatal("expected both streaming sessions")
+	}
+	if sessionA.vadService == sessionB.vadService {
+		t.Fatal("sessions must not share a stateful VAD service")
+	}
+	if len(prototypeDetector.calls) != 2 || !slices.Equal(prototypeDetector.calls[0], firstChunk) || !slices.Equal(prototypeDetector.calls[1], secondChunk) {
+		t.Fatalf("VAD calls = %v, want the two caller chunks without rolling replay", prototypeDetector.calls)
+	}
+}
+
 func TestSherpaOnlineModelReusesNativeStreamAcrossChunks(t *testing.T) {
 	recognizer := &fakeOnlineRecognizer{}
 	model := newSherpaOnlineModelForTest(recognizer)
@@ -264,7 +367,7 @@ func TestSherpaOnlineModelFinishAudioClosesNativeStream(t *testing.T) {
 	if _, err := model.ProcessAudio(context.Background(), []float32{0.1}, state); err != nil {
 		t.Fatalf("first chunk failed: %v", err)
 	}
-	result, err := model.FinishAudio(context.Background(), []float32{0.2}, state)
+	result, err := model.FinishAudio(context.Background(), nil, state)
 	if err != nil {
 		t.Fatalf("finish failed: %v", err)
 	}
@@ -281,6 +384,31 @@ func TestSherpaOnlineModelFinishAudioClosesNativeStream(t *testing.T) {
 	}
 	if stream.closeCount != 1 {
 		t.Fatalf("expected stream close after finish, got %d", stream.closeCount)
+	}
+	if !slices.Equal(stream.samples, []float32{0.1}) {
+		t.Fatalf("finish replayed audio: got native samples %v", stream.samples)
+	}
+}
+
+func TestSherpaOnlineModelReportsCumulativeStreamDuration(t *testing.T) {
+	recognizer := &fakeOnlineRecognizer{}
+	model := newSherpaOnlineModelForTest(recognizer)
+	defer model.Close()
+
+	state := &types.StreamingState{Language: "en"}
+	first, err := model.ProcessAudio(context.Background(), make([]float32, 8000), state)
+	if err != nil {
+		t.Fatalf("first chunk: %v", err)
+	}
+	if first.EndTime != 500*time.Millisecond {
+		t.Fatalf("first end time = %s, want 500ms", first.EndTime)
+	}
+	second, err := model.ProcessAudio(context.Background(), make([]float32, 8000), state)
+	if err != nil {
+		t.Fatalf("second chunk: %v", err)
+	}
+	if second.EndTime != time.Second {
+		t.Fatalf("second end time = %s, want 1s cumulative", second.EndTime)
 	}
 }
 
@@ -335,6 +463,13 @@ func TestStreamingManagerClosesASRStateOnSessionRemoval(t *testing.T) {
 	}
 	closer := &countingCloser{}
 	state.ASRState = closer
+	vadDetector := &recordingVADDetector{}
+	manager.mu.RLock()
+	session := manager.sessions["session"]
+	manager.mu.RUnlock()
+	session.mu.Lock()
+	session.vadService = &VADService{detector: vadDetector}
+	session.mu.Unlock()
 
 	if err := manager.RemoveSession("session"); err != nil {
 		t.Fatalf("failed to remove session: %v", err)
@@ -344,6 +479,9 @@ func TestStreamingManagerClosesASRStateOnSessionRemoval(t *testing.T) {
 	}
 	if state.ASRState != nil {
 		t.Fatalf("ASR state should be cleared after removal")
+	}
+	if !vadDetector.closed {
+		t.Fatal("expected session VAD service to close on removal")
 	}
 }
 
@@ -355,6 +493,13 @@ func TestStreamingManagerCloseClosesASRStates(t *testing.T) {
 	}
 	closer := &countingCloser{}
 	state.ASRState = closer
+	vadDetector := &recordingVADDetector{}
+	manager.mu.RLock()
+	session := manager.sessions["session"]
+	manager.mu.RUnlock()
+	session.mu.Lock()
+	session.vadService = &VADService{detector: vadDetector}
+	session.mu.Unlock()
 
 	if err := manager.Close(); err != nil {
 		t.Fatalf("failed to close manager: %v", err)
@@ -364,6 +509,22 @@ func TestStreamingManagerCloseClosesASRStates(t *testing.T) {
 	}
 	if state.ASRState != nil {
 		t.Fatalf("ASR state should be cleared after close")
+	}
+	if !vadDetector.closed {
+		t.Fatal("expected session VAD service to close with manager")
+	}
+}
+
+func TestStreamingManagerRejectsSessionsAfterClose(t *testing.T) {
+	manager := NewStreamingManager(nil)
+	if err := manager.Close(); err != nil {
+		t.Fatalf("close manager: %v", err)
+	}
+	if _, err := manager.GetState("late-session"); err == nil {
+		t.Fatal("closed streaming manager must reject new sessions")
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatalf("second close must remain idempotent: %v", err)
 	}
 }
 
@@ -491,6 +652,7 @@ type finalizableTestModel struct {
 	testModel
 	processCalls int
 	finishCalls  int
+	finishAudio  []float32
 }
 
 func (m *finalizableTestModel) ProcessAudio(ctx context.Context, audio []float32, state *types.StreamingState) (*types.Transcription, error) {
@@ -500,12 +662,28 @@ func (m *finalizableTestModel) ProcessAudio(ctx context.Context, audio []float32
 
 func (m *finalizableTestModel) FinishAudio(ctx context.Context, audio []float32, state *types.StreamingState) (*types.Transcription, error) {
 	m.finishCalls++
+	m.finishAudio = append([]float32(nil), audio...)
 	return &types.Transcription{
 		Text:      "final transcript",
 		IsPartial: false,
 		Language:  m.language,
 		Timestamp: time.Now(),
 	}, nil
+}
+
+type recordingVADDetector struct {
+	calls  [][]float32
+	closed bool
+}
+
+func (d *recordingVADDetector) Process(audio []float32, state any) (*types.VADResult, error) {
+	d.calls = append(d.calls, append([]float32(nil), audio...))
+	return &types.VADResult{IsSpeech: true, State: state}, nil
+}
+
+func (d *recordingVADDetector) Close() error {
+	d.closed = true
+	return nil
 }
 
 type countingCloser struct {

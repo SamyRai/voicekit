@@ -111,10 +111,10 @@ VoiceKit implements a modular, layered architecture for voice processing operati
 
 #### ASR Architecture
 - **Offline Transcription**: `asr.SherpaOfflineModel` maps complete audio inputs to `types.Transcription`
-- **Streaming Lifecycle**: Sherpa online recognition keeps one native stream per VoiceKit session, calls `InputFinished` only on finalization, and deletes stream state on endpoint/session cleanup/service close
+- **Streaming Lifecycle**: Sherpa online recognition sends each submitted chunk to one session-owned native stream exactly once, calls `InputFinished` without replaying buffered audio, and deletes stream state on finalization/session cleanup/service close
 - **Model Registry**: Dynamic model selection based on language and performance requirements
-- **Audio Buffering**: Cache-aware audio buffering with overlap handling for continuous processing
-- **VAD Integration**: Explicit `none`, `energy`, Sherpa Silero, and Sherpa TEN providers
+- **Audio Buffering**: A bounded rolling buffer remains for compatibility with custom non-finalizable models; native online recognition consumes caller chunks directly
+- **VAD Integration**: Explicit `none`, `energy`, Sherpa Silero, and Sherpa TEN providers, with one stateful detector per streaming session
 - **Test/Demo Fakes**: Fake ASR models are available only through explicit registration
 
 #### Diarization Architecture
@@ -959,7 +959,7 @@ Creates a new ASR service for real-time speech recognition.
 #### `(*Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio []float32) (*types.Transcription, error)`
 Processes a chunk of audio for streaming ASR, returning partial or final transcription results.
 
-VoiceKit keeps the native Sherpa online stream in session state across chunks. Finalization flushes the stream with `InputFinished`, deletes it, and clears the session ASR state so a later utterance starts with a fresh stream.
+VoiceKit keeps the native Sherpa online stream in session state across chunks. Each caller-provided chunk is accepted exactly once, including chunks smaller than `ChunkSize` or larger than the rolling compatibility buffer. Finalization calls `InputFinished` without submitting old audio again, deletes the stream, and clears the session ASR and VAD state so a later utterance starts fresh.
 
 #### `(*Service) RegisterModel(model asr.Model) error`
 Registers a new ASR model with the service.
@@ -1048,7 +1048,7 @@ type ASRConfig struct {
     DefaultModel         string  // Default model/transcriber name
     Language             string  // Default language ("en")
     Quantization         string  // Informational quantization label
-    MaxConcurrentStreams int     // Maximum concurrent streaming sessions
+    MaxConcurrentStreams int     // Reserved admission limit; validation exists, enforcement is pending
     StreamTimeout        int     // Stream timeout in seconds
     ChunkSize            int     // Audio chunk size in samples (16000 = 1 second at 16kHz)
     SampleRate           int     // ASR sample rate

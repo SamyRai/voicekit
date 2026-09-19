@@ -11,10 +11,11 @@ type ASRService interface {
 	ProcessAudioChunk(ctx context.Context, sessionID string, audio []float32) (*Transcription, error)
 
 	// FinishStream finalizes the streaming session identified by sessionID,
-	// flushing any buffered audio through a final decode and returning a
-	// non-partial transcription. Callers invoke it at their own utterance
-	// boundary instead of waiting for a VAD endpoint. Finalizing a session
-	// that does not exist or has no buffered audio yields an empty,
+	// signaling that no more input will arrive, flushing the recognizer's
+	// internal feature buffers, and returning a non-partial transcription.
+	// Previously submitted audio is not replayed. Callers invoke it at their own
+	// utterance boundary instead of waiting for a VAD endpoint. Finalizing a
+	// session that does not exist or has no accepted speech yields an empty,
 	// non-partial transcription rather than an error.
 	FinishStream(ctx context.Context, sessionID string) (*Transcription, error)
 

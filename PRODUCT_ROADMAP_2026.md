@@ -95,14 +95,13 @@ the `sherpa-onnx-go` v1.13.4 binding already provides but voicekit does not yet
 wrap, and pay down validation/DX debt surfaced by the first real downstream
 integration (asr_server). Full sprint task list in `todo.md`.
 
-### Integration-driven findings (verified on real models, 2026-07)
+### Integration-driven findings and status
 
-- **The finalization gap is real at the interface.** `types.ASRService` has no
-  `FinishStream`. `finalizeTranscription` (asr/service.go:303) +
-  `finalizableModel.FinishAudio` exist internally but are unexposed, so a
-  downstream caller must force a final on its own utterance boundary and can
-  present an empty or partial hypothesis as the final result. This also makes
-  online WER unmeasurable end to end.
+- **Finalization and sample ownership are implemented.** `types.ASRService`
+  exposes `FinishStream`; the September 2026 hardening pass also removed
+  rolling-window replay/truncation, made duration cumulative per utterance, and
+  gave each session its own stateful VAD detector. The remaining downstream
+  work is adopting `FinishStream` instead of forcing partial results final.
 - **Provider-name footgun.** `silero` vs `silero_vad` (and similar) silently
   falls through to a nil detector instead of erroring — a downstream native
   smoke test passed without ever loading Silero. Provider names need validation

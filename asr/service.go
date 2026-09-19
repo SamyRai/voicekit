@@ -11,13 +11,21 @@ import (
 
 // Service provides real-time streaming ASR functionality
 type Service struct {
-	config     *Config
-	models     map[string]Model
-	vadService *VADService
-	streaming  *StreamingManager
-	metrics    *ASRMetrics
+	config    *Config
+	models    map[string]Model
+	streaming *StreamingManager
+	metrics   *ASRMetrics
 
-	mu sync.RWMutex
+	mu     sync.RWMutex
+	closed bool
+
+	// vadPrototype validates native VAD construction at service startup and is
+	// transferred to the first streaming session. Later sessions receive their
+	// own detector from vadConfig so stateful neural VAD buffers are never shared
+	// across session IDs.
+	vadMu        sync.Mutex
+	vadConfig    *VADConfig
+	vadPrototype *VADService
 }
 
 type finalizableModel interface {
@@ -81,11 +89,13 @@ func NewService(config *Config) (*Service, error) {
 	}
 
 	if config.VADProvider != VADProviderNone {
-		vadService, err := NewVADService(vadConfigFromASR(config))
+		vadConfig := vadConfigFromASR(config)
+		vadService, err := NewVADService(vadConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize VAD service: %w", err)
 		}
-		service.vadService = vadService
+		service.vadConfig = vadConfig
+		service.vadPrototype = vadService
 	}
 
 	// Initialize streaming manager
@@ -109,10 +119,11 @@ func NewService(config *Config) (*Service, error) {
 	for _, oc := range config.resolvedOnlineModelConfigs() {
 		model, err := newSherpaOnlineModelFromOnline(config, oc)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize Sherpa ASR model %q: %w", oc.Name, err)
+			return nil, service.initializationError(fmt.Errorf("failed to initialize Sherpa ASR model %q: %w", oc.Name, err))
 		}
 		if err := service.RegisterModel(model); err != nil {
-			return nil, fmt.Errorf("failed to register model %q: %w", oc.Name, err)
+			_ = model.Close()
+			return nil, service.initializationError(fmt.Errorf("failed to register model %q: %w", oc.Name, err))
 		}
 	}
 
@@ -122,6 +133,13 @@ func NewService(config *Config) (*Service, error) {
 	}
 
 	return service, nil
+}
+
+func (s *Service) initializationError(initializationErr error) error {
+	if cleanupErr := s.Close(); cleanupErr != nil {
+		return fmt.Errorf("%w; cleanup failed: %v", initializationErr, cleanupErr)
+	}
+	return initializationErr
 }
 
 // SetSessionLanguage sets the language used to route sessionID's subsequent
@@ -141,14 +159,16 @@ func (s *Service) SetSessionLanguage(sessionID, language string) error {
 	if language == "" {
 		return fmt.Errorf("language cannot be empty")
 	}
-	s.streaming.setSessionLanguage(sessionID, language)
-	return nil
+	return s.streaming.setSessionLanguage(sessionID, language)
 }
 
 // RegisterModel registers a new ASR model
 func (s *Service) RegisterModel(model Model) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("ASR service is closed")
+	}
 
 	name := model.Name()
 	if _, exists := s.models[name]; exists {
@@ -168,6 +188,9 @@ func (s *Service) RegisterModel(model Model) error {
 func (s *Service) GetModel(name string) (Model, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, false
+	}
 
 	model, exists := s.models[name]
 	return model, exists
@@ -219,7 +242,10 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	// Get or create the session and hold its lock for the duration of the
 	// operation so buffer/ASR-state mutations are serialized with idle cleanup
 	// and any concurrent finalize on the same session.
-	session := s.streaming.getOrCreateSession(sessionID)
+	session, err := s.streaming.getOrCreateSession(sessionID)
+	if err != nil {
+		return nil, newSessionError("session", sessionID, err)
+	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	state := session.State
@@ -229,71 +255,72 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 		return nil, newSessionError("buffer_append", sessionID, err)
 	}
 
-	// Process VAD if available
-	if s.vadService != nil && state.Buffer.IsReady() {
-		chunk := state.Buffer.GetRecentChunk()
-		if chunk != nil {
-			defer state.Buffer.ReturnBuffer(chunk) // Return buffer to pool when done
-			vadResult, err := s.vadService.Process(chunk, state.VADState)
-			if err != nil {
-				if s.config.Logger != nil {
-					s.config.Logger.Warnf("VAD processing failed: %v", err)
-				}
-			} else {
-				state.VADState = vadResult
-
-				// Handle VAD events
-				if vadResult.IsEndpoint {
-					transcription, err := s.finalizeTranscription(ctx, session)
-					if err != nil {
-						return nil, fmt.Errorf("finalization failed: %w", err)
-					}
-					return transcription, nil
-				}
-
-				if !vadResult.IsSpeech {
-					return emptyFinalTranscription(state.Language), nil
-				}
-			}
-		}
-	}
-
-	// Process audio with ASR if buffer is ready
-	if state.Buffer.IsReady() {
-		transcription, err := s.processWithASR(ctx, session)
+	// Process only the newly submitted audio through the session-owned VAD.
+	// Neural detectors retain waveform state, so each session owns a distinct
+	// VADService and passes only its own incremental samples.
+	if s.vadConfig != nil {
+		vadService, err := s.vadForSession(session)
 		if err != nil {
-			if s.metrics != nil && s.metrics.ErrorsTotal != nil {
-				s.metrics.ErrorsTotal.Inc()
+			return nil, newSessionError("vad_initialization", sessionID, err)
+		}
+		vadResult, err := vadService.Process(audio, state.VADState)
+		if err != nil {
+			return nil, newSessionError("vad_processing", sessionID, err)
+		}
+		state.VADState = vadResult.State
+
+		if vadResult.IsEndpoint {
+			transcription, err := s.finalizeTranscription(ctx, session, audio)
+			if err != nil {
+				return nil, fmt.Errorf("finalization failed: %w", err)
 			}
-			return nil, newSessionError("processing", sessionID, err)
+			return transcription, nil
 		}
 
-		// Update metrics
-		if s.metrics != nil {
-			if s.metrics.ProcessedChunks != nil {
-				s.metrics.ProcessedChunks.Inc()
-			}
-			if transcription.Confidence > 0 && s.metrics.ConfidenceScore != nil {
-				s.metrics.ConfidenceScore.Observe(transcription.Confidence)
-			}
+		if !vadResult.IsSpeech {
+			return emptyFinalTranscription(state.Language), nil
 		}
-
-		return transcription, nil
 	}
 
-	// Buffer not ready yet, return empty result
-	return emptyFinalTranscription(state.Language), nil
+	// Online recognizers consume each caller-provided chunk exactly once. The
+	// rolling buffer remains only as a compatibility fallback for custom models
+	// that do not implement finalization.
+	transcription, err := s.processWithASR(ctx, session, audio)
+	if err != nil {
+		if s.metrics != nil && s.metrics.ErrorsTotal != nil {
+			s.metrics.ErrorsTotal.Inc()
+		}
+		return nil, newSessionError("processing", sessionID, err)
+	}
+
+	if s.metrics != nil {
+		if s.metrics.ProcessedChunks != nil {
+			s.metrics.ProcessedChunks.Inc()
+		}
+		if transcription.Confidence > 0 && s.metrics.ConfidenceScore != nil {
+			s.metrics.ConfidenceScore.Observe(transcription.Confidence)
+		}
+	}
+
+	if !transcription.IsPartial {
+		state.Buffer.Reset()
+		session.acceptedSamples = 0
+		if err := closeSessionVAD(session); err != nil {
+			return nil, newSessionError("vad_reset", sessionID, err)
+		}
+	}
+	return transcription, nil
 }
 
 // FinishStream finalizes the streaming session identified by sessionID.
 //
-// It flushes any buffered audio through a final decode (signaling
-// InputFinished to the underlying model) and returns a non-partial
-// transcription. Callers use it to force a final hypothesis at their own
-// utterance boundary instead of waiting for a VAD endpoint; it is the public
-// entry point to the same finalization path the VAD endpoint takes internally.
+// It signals InputFinished to the underlying model without replaying previously
+// accepted audio, flushes the recognizer's internal feature buffers, and returns
+// a non-partial transcription. Callers use it to force a final hypothesis at
+// their own utterance boundary instead of waiting for a VAD endpoint; it is the
+// public entry point to the same finalization path the VAD endpoint takes.
 //
-// Finalizing a session that does not exist, or one with no buffered audio,
+// Finalizing a session that does not exist, or one with no accepted speech,
 // yields an empty non-partial transcription rather than an error, so callers
 // may finalize idempotently.
 //
@@ -315,11 +342,15 @@ func (s *Service) FinishStream(ctx context.Context, sessionID string) (*types.Tr
 	defer session.mu.Unlock()
 
 	state := session.State
-	if state.Buffer == nil || state.Buffer.Size() == 0 {
+	if session.acceptedSamples == 0 {
+		state.Buffer.Reset()
+		if err := closeSessionVAD(session); err != nil {
+			return nil, newSessionError("vad_reset", sessionID, err)
+		}
 		return emptyFinalTranscription(state.Language), nil
 	}
 
-	transcription, err := s.finalizeTranscription(ctx, session)
+	transcription, err := s.finalizeTranscription(ctx, session, nil)
 	if err != nil {
 		if s.metrics != nil && s.metrics.ErrorsTotal != nil {
 			s.metrics.ErrorsTotal.Inc()
@@ -368,6 +399,7 @@ func (s *Service) modelForSession(session *Session, reqs *types.ModelRequirement
 	// this session; close it so the new model does not inherit a foreign stream.
 	if session.asrModel != nil && session.asrModel.Name() != model.Name() {
 		_ = closeASRState(session.State)
+		session.acceptedSamples = 0
 	}
 	session.asrModel = model
 	session.asrModelLanguage = language
@@ -375,7 +407,7 @@ func (s *Service) modelForSession(session *Session, reqs *types.ModelRequirement
 }
 
 // processWithASR processes audio using the session's bound ASR model.
-func (s *Service) processWithASR(ctx context.Context, session *Session) (*types.Transcription, error) {
+func (s *Service) processWithASR(ctx context.Context, session *Session, audio []float32) (*types.Transcription, error) {
 	state := session.State
 	model, err := s.modelForSession(session, &types.ModelRequirements{
 		MaxLatency: 500 * time.Millisecond,
@@ -384,25 +416,18 @@ func (s *Service) processWithASR(ctx context.Context, session *Session) (*types.
 		return nil, err
 	}
 
-	// Get audio chunk for processing
-	chunk := state.Buffer.GetRecentChunk()
-	if chunk == nil {
-		return nil, fmt.Errorf("no audio chunk available")
-	}
-	defer state.Buffer.ReturnBuffer(chunk) // Return buffer to pool when done
-
-	// Process audio with selected model
-	transcription, err := model.ProcessAudio(ctx, chunk, state)
+	transcription, err := model.ProcessAudio(ctx, audio, state)
 	if err != nil {
 		return nil, newError("model_processing", err)
 	}
+	session.acceptedSamples += int64(len(audio))
 
 	return transcription, nil
 }
 
 // finalizeTranscription finalizes transcription when VAD detects an endpoint or
 // FinishStream is called.
-func (s *Service) finalizeTranscription(ctx context.Context, session *Session) (*types.Transcription, error) {
+func (s *Service) finalizeTranscription(ctx context.Context, session *Session, finalAudio []float32) (*types.Transcription, error) {
 	state := session.State
 	model, err := s.modelForSession(session, &types.ModelRequirements{
 		MaxLatency:     1 * time.Second,
@@ -412,17 +437,7 @@ func (s *Service) finalizeTranscription(ctx context.Context, session *Session) (
 		return nil, err
 	}
 
-	chunk := state.Buffer.GetRecentChunk()
-	if chunk == nil {
-		return nil, fmt.Errorf("no audio chunk available for finalization")
-	}
-	defer state.Buffer.ReturnBuffer(chunk)
-
-	// Create a copy for finalization (since the model may modify it)
-	remainingAudio := make([]float32, len(chunk))
-	copy(remainingAudio, chunk)
-
-	finalResult, err := processFinalAudio(ctx, model, remainingAudio, state)
+	finalResult, err := processFinalAudio(ctx, model, finalAudio, state)
 	if err != nil {
 		return nil, fmt.Errorf("finalization failed: %w", err)
 	}
@@ -432,6 +447,10 @@ func (s *Service) finalizeTranscription(ctx context.Context, session *Session) (
 
 	state.Buffer.Reset()
 	state.LastActivity = time.Now()
+	session.acceptedSamples = 0
+	if err := closeSessionVAD(session); err != nil {
+		return nil, fmt.Errorf("reset VAD after finalization: %w", err)
+	}
 
 	return finalResult, nil
 }
@@ -440,13 +459,58 @@ func processFinalAudio(ctx context.Context, model Model, audio []float32, state 
 	if finalizable, ok := model.(finalizableModel); ok {
 		return finalizable.FinishAudio(ctx, audio, state)
 	}
+	if len(audio) == 0 && state != nil && state.Buffer != nil {
+		chunk := state.Buffer.GetRecentChunk()
+		if chunk == nil {
+			return nil, fmt.Errorf("no audio available for finalization")
+		}
+		defer state.Buffer.ReturnBuffer(chunk)
+		audio = chunk
+	}
 	return model.ProcessAudio(ctx, audio, state)
+}
+
+func (s *Service) vadForSession(session *Session) (*VADService, error) {
+	if session.vadService != nil {
+		return session.vadService, nil
+	}
+
+	s.vadMu.Lock()
+	defer s.vadMu.Unlock()
+	if s.vadPrototype != nil {
+		session.vadService = s.vadPrototype
+		s.vadPrototype = nil
+		return session.vadService, nil
+	}
+	if s.vadConfig == nil {
+		return nil, fmt.Errorf("VAD is not configured")
+	}
+	config := *s.vadConfig
+	service, err := NewVADService(&config)
+	if err != nil {
+		return nil, err
+	}
+	session.vadService = service
+	return service, nil
+}
+
+func closeSessionVAD(session *Session) error {
+	if session == nil || session.vadService == nil {
+		return nil
+	}
+	err := session.vadService.Close()
+	session.vadService = nil
+	session.State.VADState = nil
+	return err
 }
 
 // SelectModel selects the best model for given requirements
 func (s *Service) SelectModel(language string, requirements *types.ModelRequirements) (Model, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, fmt.Errorf("ASR service is closed")
+	}
 
 	var bestModel Model
 	var bestScore float64
@@ -494,7 +558,16 @@ func (s *Service) calculateModelScore(model Model, req *types.ModelRequirements)
 // Close releases all resources
 func (s *Service) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	models := make(map[string]Model, len(s.models))
+	for name, model := range s.models {
+		models[name] = model
+	}
+	s.mu.Unlock()
 
 	var errs []error
 
@@ -504,17 +577,20 @@ func (s *Service) Close() error {
 		}
 	}
 
-	for name, model := range s.models {
+	for name, model := range models {
 		if err := model.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close model %s: %w", name, err))
 		}
 	}
 
-	if s.vadService != nil {
-		if err := s.vadService.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close VAD service: %w", err))
+	s.vadMu.Lock()
+	if s.vadPrototype != nil {
+		if err := s.vadPrototype.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close VAD prototype: %w", err))
 		}
+		s.vadPrototype = nil
 	}
+	s.vadMu.Unlock()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("multiple close errors: %v", errs)
