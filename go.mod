@@ -7,7 +7,7 @@ require (
 	github.com/go-audio/wav v1.1.0
 	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/jfreymuth/oggvorbis v1.0.5
-	github.com/k2-fsa/sherpa-onnx-go v1.13.4
+	github.com/k2-fsa/sherpa-onnx-go v1.13.8
 	github.com/mewkiz/flac v1.0.13
 	github.com/viktordanov/go-hnswlib v1.4.0
 )
@@ -30,9 +30,9 @@ require (
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.4 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.8 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.8 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.8 // indirect
 	github.com/klauspost/compress v1.16.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
