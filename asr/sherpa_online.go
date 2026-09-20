@@ -284,7 +284,7 @@ func (m *SherpaOnlineModel) transcriptionFromOnlineResult(result *sherpa.OnlineR
 		Timestamp:  time.Now(),
 		StartTime:  0,
 		EndTime:    time.Duration(acceptedSamples) * time.Second / time.Duration(m.sampleRate),
-		Words:      wordsFromOnlineResult(result),
+		Tokens:     tokensFromOnlineResult(result),
 	}
 }
 
@@ -454,30 +454,21 @@ func nativeOnlineStream(stream onlineStream) (*sherpa.OnlineStream, error) {
 	return sherpaStream.stream, nil
 }
 
-func wordsFromOnlineResult(result *sherpa.OnlineRecognizerResult) []types.Word {
-	if result == nil || len(result.Tokens) == 0 || len(result.Timestamps) == 0 {
+func tokensFromOnlineResult(result *sherpa.OnlineRecognizerResult) []types.Token {
+	if result == nil || len(result.Tokens) == 0 {
 		return nil
 	}
 
-	n := len(result.Tokens)
-	if len(result.Timestamps) < n {
-		n = len(result.Timestamps)
-	}
-	words := make([]types.Word, 0, n)
-	for i := 0; i < n; i++ {
-		start := time.Duration(result.Timestamps[i] * float32(time.Second))
-		end := start
-		if i+1 < len(result.Timestamps) {
-			end = time.Duration(result.Timestamps[i+1] * float32(time.Second))
+	tokens := make([]types.Token, 0, len(result.Tokens))
+	for i, text := range result.Tokens {
+		token := types.Token{Text: text}
+		if i < len(result.Timestamps) {
+			token.HasTiming = true
+			token.StartTime = time.Duration(result.Timestamps[i] * float32(time.Second))
 		}
-		words = append(words, types.Word{
-			Text:       result.Tokens[i],
-			StartTime:  start,
-			EndTime:    end,
-			Confidence: 0,
-		})
+		tokens = append(tokens, token)
 	}
-	return words
+	return tokens
 }
 
 func boolToInt(v bool) int {

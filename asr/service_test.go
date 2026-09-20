@@ -2,9 +2,12 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,8 +126,14 @@ func TestSherpaOfflineModelTranscribeMapsResult(t *testing.T) {
 	if result.EndTime != 2*time.Second {
 		t.Fatalf("unexpected end time %s", result.EndTime)
 	}
-	if len(result.Words) != 2 {
-		t.Fatalf("expected two words, got %d", len(result.Words))
+	if len(result.Tokens) != 2 {
+		t.Fatalf("expected two model-native tokens, got %d", len(result.Tokens))
+	}
+	if len(result.Words) != 0 {
+		t.Fatalf("tokens must not be exposed as segmented words, got %d words", len(result.Words))
+	}
+	if result.Tokens[0].Text != "hello" || !result.Tokens[0].HasTiming || result.Tokens[1].StartTime != 500*time.Millisecond || result.Tokens[1].Duration != 300*time.Millisecond {
+		t.Fatalf("unexpected token mapping: %+v", result.Tokens)
 	}
 	if stream.acceptedRate != 2 || len(stream.acceptedSamples) != 4 {
 		t.Fatalf("offline stream did not receive audio")
@@ -412,6 +421,32 @@ func TestSherpaOnlineModelReportsCumulativeStreamDuration(t *testing.T) {
 	}
 }
 
+func TestSherpaOnlineModelExposesTokensWithoutPretendingTheyAreWords(t *testing.T) {
+	recognizer := &fakeOnlineRecognizer{
+		result: &sherpa.OnlineRecognizerResult{
+			Text:       "hello",
+			Tokens:     []string{"▁hel", "lo", "!"},
+			Timestamps: []float32{0, 0.5},
+		},
+	}
+	model := newSherpaOnlineModelForTest(recognizer)
+	defer model.Close()
+
+	result, err := model.ProcessAudio(context.Background(), []float32{0.1}, &types.StreamingState{Language: "en"})
+	if err != nil {
+		t.Fatalf("process audio: %v", err)
+	}
+	if len(result.Tokens) != 3 {
+		t.Fatalf("tokens = %d, want 3", len(result.Tokens))
+	}
+	if result.Tokens[0].Text != "▁hel" || !result.Tokens[0].HasTiming || result.Tokens[1].Text != "lo" || result.Tokens[1].StartTime != 500*time.Millisecond || result.Tokens[2].Text != "!" || result.Tokens[2].HasTiming {
+		t.Fatalf("unexpected tokens: %+v", result.Tokens)
+	}
+	if len(result.Words) != 0 {
+		t.Fatalf("online model-native tokens must not populate Words: %+v", result.Words)
+	}
+}
+
 func TestSherpaOnlineModelEndpointResetsWithoutFinishing(t *testing.T) {
 	recognizer := &fakeOnlineRecognizer{endpoint: true}
 	model := newSherpaOnlineModelForTest(recognizer)
@@ -528,6 +563,134 @@ func TestStreamingManagerRejectsSessionsAfterClose(t *testing.T) {
 	}
 }
 
+func TestASRServiceEnforcesStreamCapacityAndReleasesFinalizedSlot(t *testing.T) {
+	service := newTestServiceWithCapacity(2)
+	defer service.Close()
+	if err := service.RegisterModel(&testModel{name: "fake", language: "en", quantization: "int8"}); err != nil {
+		t.Fatalf("register model: %v", err)
+	}
+
+	ctx := context.Background()
+	for _, sessionID := range []string{"one", "two"} {
+		if _, err := service.ProcessAudioChunk(ctx, sessionID, []float32{0.1}); err != nil {
+			t.Fatalf("admit %s: %v", sessionID, err)
+		}
+	}
+	if _, err := service.ProcessAudioChunk(ctx, "two", []float32{0.2}); err != nil {
+		t.Fatalf("existing admitted stream must continue at capacity: %v", err)
+	}
+
+	_, err := service.ProcessAudioChunk(ctx, "three", []float32{0.3})
+	if err == nil {
+		t.Fatal("expected the third concurrent stream to be rejected")
+	}
+	var capacityErr *StreamCapacityError
+	if !errors.As(err, &capacityErr) {
+		t.Fatalf("expected a typed StreamCapacityError, got %T: %v", err, err)
+	}
+	if capacityErr.Limit != 2 || capacityErr.Active != 2 {
+		t.Fatalf("unexpected capacity error: %+v", capacityErr)
+	}
+
+	if _, err := service.FinishStream(ctx, "one"); err != nil {
+		t.Fatalf("finish first stream: %v", err)
+	}
+	if _, err := service.ProcessAudioChunk(ctx, "three", []float32{0.3}); err != nil {
+		t.Fatalf("finalization should release one admission slot: %v", err)
+	}
+	if got := service.streaming.GetActiveSessions(); got != 2 {
+		t.Fatalf("active streams = %d, want 2", got)
+	}
+}
+
+func TestStreamingManagerConcurrentAdmissionNeverExceedsLimit(t *testing.T) {
+	config := &types.StreamingConfig{
+		MaxConcurrentStreams: 3,
+		ChunkSize:            16,
+		BufferSize:           48,
+		SampleRate:           16000,
+		StreamTimeout:        time.Minute,
+		IdleTimeout:          time.Minute,
+	}
+	manager := NewStreamingManager(config)
+	defer manager.Close()
+
+	var admitted atomic.Int32
+	var rejected atomic.Int32
+	var invalid atomic.Int32
+	var wg sync.WaitGroup
+	for i := range 24 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := manager.getOrCreateSession(string(rune('a' + i))); err != nil {
+				var capacityErr *StreamCapacityError
+				if errors.As(err, &capacityErr) {
+					rejected.Add(1)
+					return
+				}
+				invalid.Add(1)
+				return
+			}
+			admitted.Add(1)
+		}()
+	}
+	wg.Wait()
+
+	if got := admitted.Load(); got != 3 {
+		t.Fatalf("admitted = %d, want 3", got)
+	}
+	if got := rejected.Load(); got != 21 {
+		t.Fatalf("capacity rejections = %d, want 21", got)
+	}
+	if got := invalid.Load(); got != 0 {
+		t.Fatalf("unexpected non-capacity errors = %d", got)
+	}
+	if got := manager.GetActiveSessions(); got != 3 {
+		t.Fatalf("active streams = %d, want 3", got)
+	}
+}
+
+func TestStreamingManagerKeepsCapacityForQueuedSameSessionOperation(t *testing.T) {
+	config := &types.StreamingConfig{
+		MaxConcurrentStreams: 1,
+		ChunkSize:            16,
+		BufferSize:           48,
+		SampleRate:           16000,
+		StreamTimeout:        time.Minute,
+		IdleTimeout:          time.Minute,
+	}
+	manager := NewStreamingManager(config)
+	defer manager.Close()
+
+	first, err := manager.acquireSession("one")
+	if err != nil {
+		t.Fatalf("acquire first operation: %v", err)
+	}
+	second, err := manager.acquireSession("one")
+	if err != nil {
+		t.Fatalf("queue same-session operation: %v", err)
+	}
+	if first != second {
+		t.Fatal("same session ID must reuse one session")
+	}
+
+	manager.completeSessionOperation(first, true)
+	if _, err := manager.getOrCreateSession("two"); err == nil {
+		t.Fatal("a queued same-session operation must retain the admission slot")
+	} else {
+		var capacityErr *StreamCapacityError
+		if !errors.As(err, &capacityErr) {
+			t.Fatalf("expected capacity error while queued work remains, got %v", err)
+		}
+	}
+
+	manager.completeSessionOperation(second, true)
+	if _, err := manager.getOrCreateSession("two"); err != nil {
+		t.Fatalf("last final operation should release the slot: %v", err)
+	}
+}
+
 func BenchmarkASRService_ProcessAudioChunk(b *testing.B) {
 	service := newTestService()
 	defer service.Close()
@@ -548,23 +711,29 @@ func BenchmarkASRService_ProcessAudioChunk(b *testing.B) {
 }
 
 func newTestService() *Service {
+	return newTestServiceWithCapacity(10)
+}
+
+func newTestServiceWithCapacity(maxConcurrentStreams int) *Service {
 	config := DefaultConfig()
 	config.Enabled = true
 	config.Backend = BackendSherpaOnline
 	config.DefaultModel = "fake"
 	config.VADProvider = VADProviderNone
+	config.MaxConcurrentStreams = maxConcurrentStreams
 
 	streamingConfig := &types.StreamingConfig{
-		ChunkSize:          config.ChunkSize,
-		OverlapSize:        config.ChunkSize / 10,
-		BufferSize:         config.ChunkSize * 3,
-		SampleRate:         config.SampleRate,
-		StreamTimeout:      time.Duration(config.StreamTimeout) * time.Second,
-		IdleTimeout:        30 * time.Second,
-		FlushInterval:      100 * time.Millisecond,
-		PartialResults:     true,
-		StabilityThreshold: 0.8,
-		MinConfidence:      0.5,
+		MaxConcurrentStreams: config.MaxConcurrentStreams,
+		ChunkSize:            config.ChunkSize,
+		OverlapSize:          config.ChunkSize / 10,
+		BufferSize:           config.ChunkSize * 3,
+		SampleRate:           config.SampleRate,
+		StreamTimeout:        time.Duration(config.StreamTimeout) * time.Second,
+		IdleTimeout:          30 * time.Second,
+		FlushInterval:        100 * time.Millisecond,
+		PartialResults:       true,
+		StabilityThreshold:   0.8,
+		MinConfidence:        0.5,
 	}
 
 	return &Service{

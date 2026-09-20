@@ -14,6 +14,8 @@ import (
 type StreamingManager struct {
 	config        *types.StreamingConfig
 	sessions      map[string]*Session
+	activeStreams int
+	maxStreams    int
 	mu            sync.RWMutex
 	metrics       *StreamingMetrics
 	cleanupTicker *time.Ticker
@@ -53,6 +55,16 @@ type Session struct {
 	// non-finalizable models, but it is not the source of truth for native
 	// streaming progress. Guarded by mu.
 	acceptedSamples int64
+
+	// admitted records whether this session currently occupies one configured
+	// concurrent-stream slot. Guarded by the manager's mu.
+	admitted bool
+
+	// operations counts processing/finalization calls that acquired this session
+	// but have not completed. It prevents one final call from releasing the slot
+	// underneath another same-session call already queued on mu. Guarded by the
+	// manager's mu.
+	operations int
 }
 
 // Use StreamingConfig from types package
@@ -70,26 +82,32 @@ type StreamingMetrics struct {
 func NewStreamingManager(config *types.StreamingConfig) *StreamingManager {
 	if config == nil {
 		config = &types.StreamingConfig{
-			ChunkSize:          16000,
-			OverlapSize:        1600,
-			BufferSize:         48000,
-			SampleRate:         16000,
-			StreamTimeout:      5 * time.Minute,
-			IdleTimeout:        30 * time.Second,
-			FlushInterval:      100 * time.Millisecond,
-			PartialResults:     true,
-			StabilityThreshold: 0.8,
-			MinConfidence:      0.5,
+			MaxConcurrentStreams: 10,
+			ChunkSize:            16000,
+			OverlapSize:          1600,
+			BufferSize:           48000,
+			SampleRate:           16000,
+			StreamTimeout:        5 * time.Minute,
+			IdleTimeout:          30 * time.Second,
+			FlushInterval:        100 * time.Millisecond,
+			PartialResults:       true,
+			StabilityThreshold:   0.8,
+			MinConfidence:        0.5,
 		}
+	}
+	maxStreams := config.MaxConcurrentStreams
+	if maxStreams <= 0 {
+		maxStreams = 10
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &StreamingManager{
-		config:   config,
-		sessions: make(map[string]*Session),
-		metrics:  &StreamingMetrics{},
-		ctx:      ctx,
-		cancel:   cancel,
+		config:     config,
+		sessions:   make(map[string]*Session),
+		maxStreams: maxStreams,
+		metrics:    &StreamingMetrics{},
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	// Start cleanup routine
@@ -98,21 +116,44 @@ func NewStreamingManager(config *types.StreamingConfig) *StreamingManager {
 	return manager
 }
 
-// getOrCreateSession returns the session for sessionID, creating it if absent,
-// and marks it active. Callers must hold the returned session's mutex while
-// operating on its State so those operations are serialized with idle cleanup.
+// getOrCreateSession returns and admits the session for sessionID, creating it
+// if absent. Callers must hold the returned session's mutex while operating on
+// its State so those operations are serialized with idle cleanup.
 func (m *StreamingManager) getOrCreateSession(sessionID string) (*Session, error) {
+	return m.admitSession(sessionID, false)
+}
+
+// acquireSession admits a session and records one queued/in-flight operation.
+// The caller must pair it with completeSessionOperation.
+func (m *StreamingManager) acquireSession(sessionID string) (*Session, error) {
+	return m.admitSession(sessionID, true)
+}
+
+func (m *StreamingManager) admitSession(sessionID string, trackOperation bool) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil, fmt.Errorf("streaming manager is closed")
 	}
 
+	now := time.Now()
 	session, exists := m.sessions[sessionID]
+	if exists && session.admitted {
+		session.LastActivity = now
+		session.State.LastActivity = now
+		if trackOperation {
+			session.operations++
+		}
+		return session, nil
+	}
+	if m.activeStreams >= m.maxStreams {
+		return nil, &StreamCapacityError{Limit: m.maxStreams, Active: m.activeStreams}
+	}
+
 	if !exists {
 		session = &Session{
 			ID:      sessionID,
-			Created: time.Now(),
+			Created: now,
 			Config:  m.config,
 		}
 		session.LastActivity = session.Created
@@ -125,13 +166,19 @@ func (m *StreamingManager) getOrCreateSession(sessionID string) (*Session, error
 		}
 
 		m.sessions[sessionID] = session
-
-		if m.metrics.ActiveSessions != nil {
-			m.metrics.ActiveSessions.Inc()
-		}
 	} else {
-		session.LastActivity = time.Now()
-		session.State.LastActivity = session.LastActivity
+		session.Created = now
+		session.LastActivity = now
+		session.State.LastActivity = now
+	}
+
+	session.admitted = true
+	m.activeStreams++
+	if m.metrics.ActiveSessions != nil {
+		m.metrics.ActiveSessions.Inc()
+	}
+	if trackOperation {
+		session.operations++
 	}
 
 	return session, nil
@@ -151,12 +198,15 @@ func (m *StreamingManager) GetState(sessionID string) (*types.StreamingState, er
 // mutex so it cannot race with an in-flight ProcessAudioChunk/FinishStream
 // call or idle cleanup on the same session.
 func (m *StreamingManager) setSessionLanguage(sessionID, language string) error {
-	session, err := m.getOrCreateSession(sessionID)
+	session, err := m.acquireSession(sessionID)
 	if err != nil {
 		return err
 	}
 	session.mu.Lock()
-	defer session.mu.Unlock()
+	defer func() {
+		session.mu.Unlock()
+		m.completeSessionOperation(session, false)
+	}()
 	session.State.Language = language
 	return nil
 }
@@ -174,6 +224,7 @@ func (m *StreamingManager) sessionForFinalize(sessionID string) (*Session, bool)
 	if !exists {
 		return nil, false
 	}
+	session.operations++
 	session.LastActivity = time.Now()
 	session.State.LastActivity = session.LastActivity
 	return session, true
@@ -195,17 +246,15 @@ func (m *StreamingManager) RemoveSession(sessionID string) error {
 	}
 
 	delete(m.sessions, sessionID)
-
-	if m.metrics.ActiveSessions != nil {
-		m.metrics.ActiveSessions.Dec()
-	}
 	m.mu.Unlock()
 
 	// Close outside the manager lock, under the session lock, so an in-flight
 	// process/finalize on this session finishes before its ASR state is closed.
 	session.mu.Lock()
-	defer session.mu.Unlock()
-	if err := closeSessionResources(session); err != nil {
+	err := closeSessionResources(session)
+	session.mu.Unlock()
+	m.releaseSession(session)
+	if err != nil {
 		return fmt.Errorf("failed to close session resources: %w", err)
 	}
 
@@ -216,7 +265,45 @@ func (m *StreamingManager) RemoveSession(sessionID string) error {
 func (m *StreamingManager) GetActiveSessions() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.sessions)
+	return m.activeStreams
+}
+
+// releaseSession returns a finalized session's admission slot while retaining
+// its metadata (including language selection) for later utterances.
+func (m *StreamingManager) releaseSession(session *Session) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.releaseSessionLocked(session)
+}
+
+// completeSessionOperation releases one queued/in-flight operation. A final
+// operation returns the admission slot only when no same-session operation is
+// still queued, so capacity cannot be released underneath serialized work.
+func (m *StreamingManager) completeSessionOperation(session *Session, final bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if session == nil {
+		return
+	}
+	if session.operations > 0 {
+		session.operations--
+	}
+	if final && session.operations == 0 {
+		m.releaseSessionLocked(session)
+	}
+}
+
+func (m *StreamingManager) releaseSessionLocked(session *Session) {
+	if session == nil || !session.admitted {
+		return
+	}
+	session.admitted = false
+	if m.activeStreams > 0 {
+		m.activeStreams--
+	}
+	if m.metrics.ActiveSessions != nil {
+		m.metrics.ActiveSessions.Dec()
+	}
 }
 
 // Close closes the streaming manager
@@ -248,6 +335,7 @@ func (m *StreamingManager) Close() error {
 			errs = append(errs, fmt.Errorf("failed to close session %s resources: %w", session.ID, err))
 		}
 		session.mu.Unlock()
+		m.releaseSession(session)
 	}
 
 	if len(errs) > 0 {
@@ -299,9 +387,6 @@ func (m *StreamingManager) cleanupExpiredSessions() {
 		if m.metrics.SessionDuration != nil {
 			m.metrics.SessionDuration.Observe(time.Since(session.Created).Seconds())
 		}
-		if m.metrics.ActiveSessions != nil {
-			m.metrics.ActiveSessions.Dec()
-		}
 	}
 	m.mu.Unlock()
 
@@ -309,6 +394,7 @@ func (m *StreamingManager) cleanupExpiredSessions() {
 		session.mu.Lock()
 		_ = closeSessionResources(session)
 		session.mu.Unlock()
+		m.releaseSession(session)
 	}
 }
 

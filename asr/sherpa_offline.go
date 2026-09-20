@@ -3,7 +3,6 @@ package asr
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -212,37 +211,28 @@ func transcriptionFromOfflineResult(result *sherpa.OfflineRecognizerResult, fall
 		Timestamp:  time.Now(),
 		StartTime:  0,
 		EndTime:    time.Duration(sampleCount) * time.Second / time.Duration(sampleRate),
-		Words:      wordsFromOfflineResult(result),
+		Tokens:     tokensFromOfflineResult(result),
 	}
 }
 
-func wordsFromOfflineResult(result *sherpa.OfflineRecognizerResult) []types.Word {
-	if result == nil || len(result.Tokens) == 0 || len(result.Timestamps) == 0 {
+func tokensFromOfflineResult(result *sherpa.OfflineRecognizerResult) []types.Token {
+	if result == nil || len(result.Tokens) == 0 {
 		return nil
 	}
 
-	n := len(result.Tokens)
-	if len(result.Timestamps) < n {
-		n = len(result.Timestamps)
-	}
-
-	words := make([]types.Word, 0, n)
-	for i := 0; i < n; i++ {
-		start := time.Duration(result.Timestamps[i] * float32(time.Second))
-		end := start
-		if i < len(result.Durations) && result.Durations[i] > 0 {
-			end = start + time.Duration(result.Durations[i]*float32(time.Second))
-		} else if i+1 < len(result.Timestamps) {
-			end = time.Duration(result.Timestamps[i+1] * float32(time.Second))
+	tokens := make([]types.Token, 0, len(result.Tokens))
+	for i, text := range result.Tokens {
+		token := types.Token{Text: text}
+		if i < len(result.Timestamps) {
+			token.HasTiming = true
+			token.StartTime = time.Duration(result.Timestamps[i] * float32(time.Second))
 		}
-		words = append(words, types.Word{
-			Text:       strings.TrimSpace(result.Tokens[i]),
-			StartTime:  start,
-			EndTime:    end,
-			Confidence: 0,
-		})
+		if i < len(result.Durations) && result.Durations[i] > 0 {
+			token.Duration = time.Duration(result.Durations[i] * float32(time.Second))
+		}
+		tokens = append(tokens, token)
 	}
-	return words
+	return tokens
 }
 
 type nativeOfflineRecognizer struct {

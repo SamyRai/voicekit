@@ -2,6 +2,18 @@ package asr
 
 import "fmt"
 
+// StreamCapacityError reports that a new streaming session could not be
+// admitted because every configured stream slot is active. Callers can recover
+// it through errors.As even when Service wraps it with session context.
+type StreamCapacityError struct {
+	Limit  int
+	Active int
+}
+
+func (e *StreamCapacityError) Error() string {
+	return fmt.Sprintf("ASR streaming capacity reached: %d active streams (limit %d)", e.Active, e.Limit)
+}
+
 // Error wraps ASR operation failures without importing the root package.
 type Error struct {
 	Op        string

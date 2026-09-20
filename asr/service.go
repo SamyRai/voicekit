@@ -100,16 +100,17 @@ func NewService(config *Config) (*Service, error) {
 
 	// Initialize streaming manager
 	streamingConfig := &types.StreamingConfig{
-		ChunkSize:          config.ChunkSize,
-		OverlapSize:        config.ChunkSize / 10,
-		BufferSize:         config.ChunkSize * 3,
-		SampleRate:         config.SampleRate,
-		StreamTimeout:      time.Duration(config.StreamTimeout) * time.Second,
-		IdleTimeout:        30 * time.Second,
-		FlushInterval:      100 * time.Millisecond,
-		PartialResults:     true,
-		StabilityThreshold: 0.8,
-		MinConfidence:      0.5,
+		MaxConcurrentStreams: config.MaxConcurrentStreams,
+		ChunkSize:            config.ChunkSize,
+		OverlapSize:          config.ChunkSize / 10,
+		BufferSize:           config.ChunkSize * 3,
+		SampleRate:           config.SampleRate,
+		StreamTimeout:        time.Duration(config.StreamTimeout) * time.Second,
+		IdleTimeout:          30 * time.Second,
+		FlushInterval:        100 * time.Millisecond,
+		PartialResults:       true,
+		StabilityThreshold:   0.8,
+		MinConfidence:        0.5,
 	}
 	service.streaming = NewStreamingManager(streamingConfig)
 
@@ -150,8 +151,8 @@ func (s *Service) initializationError(initializationErr error) error {
 // called.
 //
 // This only changes which already-registered model a session's calls are
-// routed to; it does not perform language identification itself (see the
-// planned LanguageIdentifier follow-on).
+// routed to; it does not perform language identification itself (use the
+// standalone LanguageIdentifier capability before selecting a language).
 func (s *Service) SetSessionLanguage(sessionID, language string) error {
 	if sessionID == "" {
 		return fmt.Errorf("sessionID cannot be empty")
@@ -218,7 +219,9 @@ func (s *Service) GetModel(name string) (Model, bool) {
 //   - Error if processing fails or context is canceled
 //
 // Session management: sessions are automatically created on first call and
-// cleaned up after periods of inactivity. Multiple concurrent sessions supported.
+// cleaned up after periods of inactivity. New active sessions are admitted up
+// to Config.MaxConcurrentStreams; capacity errors are discoverable with
+// errors.As as *StreamCapacityError. Final results return their admission slot.
 //
 // Thread-safe: can be called concurrently from multiple goroutines.
 func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio []float32) (*types.Transcription, error) {
@@ -242,12 +245,16 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	// Get or create the session and hold its lock for the duration of the
 	// operation so buffer/ASR-state mutations are serialized with idle cleanup
 	// and any concurrent finalize on the same session.
-	session, err := s.streaming.getOrCreateSession(sessionID)
+	session, err := s.streaming.acquireSession(sessionID)
 	if err != nil {
 		return nil, newSessionError("session", sessionID, err)
 	}
 	session.mu.Lock()
-	defer session.mu.Unlock()
+	finalOperation := false
+	defer func() {
+		session.mu.Unlock()
+		s.streaming.completeSessionOperation(session, finalOperation)
+	}()
 	state := session.State
 
 	// Add audio to buffer
@@ -272,8 +279,10 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 		if vadResult.IsEndpoint {
 			transcription, err := s.finalizeTranscription(ctx, session, audio)
 			if err != nil {
+				finalOperation = session.acceptedSamples == 0
 				return nil, fmt.Errorf("finalization failed: %w", err)
 			}
+			finalOperation = true
 			return transcription, nil
 		}
 
@@ -305,6 +314,7 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	if !transcription.IsPartial {
 		state.Buffer.Reset()
 		session.acceptedSamples = 0
+		finalOperation = true
 		if err := closeSessionVAD(session); err != nil {
 			return nil, newSessionError("vad_reset", sessionID, err)
 		}
@@ -339,11 +349,16 @@ func (s *Service) FinishStream(ctx context.Context, sessionID string) (*types.Tr
 		return emptyFinalTranscription("en"), nil
 	}
 	session.mu.Lock()
-	defer session.mu.Unlock()
+	finalOperation := false
+	defer func() {
+		session.mu.Unlock()
+		s.streaming.completeSessionOperation(session, finalOperation)
+	}()
 
 	state := session.State
 	if session.acceptedSamples == 0 {
 		state.Buffer.Reset()
+		finalOperation = true
 		if err := closeSessionVAD(session); err != nil {
 			return nil, newSessionError("vad_reset", sessionID, err)
 		}
@@ -352,11 +367,13 @@ func (s *Service) FinishStream(ctx context.Context, sessionID string) (*types.Tr
 
 	transcription, err := s.finalizeTranscription(ctx, session, nil)
 	if err != nil {
+		finalOperation = session.acceptedSamples == 0
 		if s.metrics != nil && s.metrics.ErrorsTotal != nil {
 			s.metrics.ErrorsTotal.Inc()
 		}
 		return nil, newSessionError("finalization", sessionID, err)
 	}
+	finalOperation = true
 	return transcription, nil
 }
 

@@ -58,9 +58,22 @@ type Transcription struct {
 	Emotion    string        `json:"emotion,omitempty"`
 	Event      string        `json:"event,omitempty"`
 	Timestamp  time.Time     `json:"timestamp"`
+	Tokens     []Token       `json:"tokens,omitempty"`
 	Words      []Word        `json:"words,omitempty"`
 	StartTime  time.Duration `json:"start_time,omitempty"`
 	EndTime    time.Duration `json:"end_time,omitempty"`
+}
+
+// Token is a model-native ASR token with optional timing. Tokens may be
+// characters, subwords, or complete words depending on the recognizer and its
+// vocabulary; callers must not treat them as word segmentation. HasTiming
+// distinguishes a real zero timestamp from a recognizer that exposed no token
+// timing. A zero Duration means no token duration was exposed.
+type Token struct {
+	Text      string        `json:"text"`
+	HasTiming bool          `json:"has_timing"`
+	StartTime time.Duration `json:"start_time"`
+	Duration  time.Duration `json:"duration,omitempty"`
 }
 
 // Word represents a word-level transcription with timing
@@ -95,16 +108,19 @@ type AudioBufferInterface interface {
 
 // StreamingConfig holds streaming configuration
 type StreamingConfig struct {
-	ChunkSize          int
-	OverlapSize        int
-	BufferSize         int
-	SampleRate         int
-	StreamTimeout      time.Duration
-	IdleTimeout        time.Duration
-	FlushInterval      time.Duration
-	PartialResults     bool
-	StabilityThreshold float64
-	MinConfidence      float64
+	// MaxConcurrentStreams limits admitted active session streams. Final results
+	// return their slot; non-positive values use the manager default.
+	MaxConcurrentStreams int
+	ChunkSize            int
+	OverlapSize          int
+	BufferSize           int
+	SampleRate           int
+	StreamTimeout        time.Duration
+	IdleTimeout          time.Duration
+	FlushInterval        time.Duration
+	PartialResults       bool
+	StabilityThreshold   float64
+	MinConfidence        float64
 }
 
 // ModelRequirements defines requirements for model selection
