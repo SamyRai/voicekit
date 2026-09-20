@@ -429,9 +429,12 @@ func floatToInt24(sample float32) int32 {
 
 func floatToInt32(sample float32) int32 {
 	if sample <= -1 {
-		return -2147483648
+		return math.MinInt32
 	}
-	return int32(math.Round(float64(sample * 2147483647)))
+	if sample >= 1 {
+		return math.MaxInt32
+	}
+	return int32(math.Round(float64(sample) * float64(math.MaxInt32)))
 }
 
 // Compressed audio format support is not implemented
