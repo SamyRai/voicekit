@@ -57,7 +57,7 @@ func (b *AudioBuffer) Append(audio []float32) error {
 		// Data is larger than buffer capacity, replace entire buffer
 		copy(b.buffer, audio[len(audio)-b.capacity:])
 		b.readIdx = 0
-		b.writeIdx = b.capacity
+		b.writeIdx = 0
 		b.size = b.capacity
 		return nil
 	}

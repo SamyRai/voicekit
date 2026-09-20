@@ -8,7 +8,7 @@ No model files are committed or required by this note.
 
 ## Executive Summary
 
-Sherpa-ONNX should remain VoiceKit's primary native inference stack. The latest checked Go module is `github.com/k2-fsa/sherpa-onnx-go v1.13.3`, and the upstream `sherpa-onnx` release `v1.13.3` was published on June 15, 2026. The current Go API and platform packages expose enough typed surface for streaming ASR, offline ASR, VAD, speaker embedding extraction, offline speaker diarization, and offline TTS. VoiceKit now targets Go 1.26.4 for this foundation branch.
+Sherpa-ONNX should remain VoiceKit's primary native inference stack. The repository currently pins `github.com/k2-fsa/sherpa-onnx-go v1.13.4` (the original July research pass checked v1.13.3). The current Go API and platform packages expose enough typed surface for streaming ASR, offline ASR, VAD, speaker embedding extraction, offline speaker diarization, denoising, keyword spotting, punctuation, language identification, and offline/streaming TTS. VoiceKit targets Go 1.26.4.
 
 The main correction to the foundation sprint roadmap is that VoiceKit should not build much more custom diarization logic. Sherpa already exposes `OfflineSpeakerDiarization` and `SpeakerEmbeddingExtractor` in Go. VoiceKit now adapts `OfflineSpeakerDiarization` behind its own backend interface, keeps its typed result shapes, and confines the old silence-plus-clustering path to an explicit `basic` backend.
 
@@ -28,12 +28,12 @@ Checked sources:
 - Speaker diarization docs: https://k2-fsa.github.io/sherpa/onnx/speaker-diarization/index.html
 - Speaker identification docs: https://k2-fsa.github.io/sherpa/onnx/speaker-identification/index.html
 - TTS docs: https://k2-fsa.github.io/sherpa/onnx/tts/index.html
-- Local Go module source: `$GOMODCACHE/github.com/k2-fsa/sherpa-onnx-go-macos@v1.13.3/sherpa_onnx.go`
+- Local Go module source: `$GOMODCACHE/github.com/k2-fsa/sherpa-onnx-go-macos@v1.13.4/sherpa_onnx.go`
 
 Findings:
 
-- `sherpa-onnx-go v1.13.3` is the latest Go module version returned by `go list -m -versions`.
-- `sherpa-onnx v1.13.3` release notes include mid-2026 work such as multilingual Nemotron-3.5 streaming ASR, Android QNN demo work, and an iOS ONNX Runtime 1.26.0 update.
+- The repository-pinned module is `sherpa-onnx-go v1.13.4`; the initial research snapshot used v1.13.3.
+- The v1.13.3 release notes reviewed in the initial pass included mid-2026 work such as multilingual Nemotron-3.5 streaming ASR, Android QNN demo work, and an iOS ONNX Runtime 1.26.0 update.
 - `v1.13.2` release notes are also relevant: NeMo Parakeet Unified streaming, KittenTTS v0.8, Supertonic3 TTS, WASM fixes, and model export work.
 - Official Go docs state the Go API supports both streaming and non-streaming ASR, ships prebuilt platform libraries, and requires CGO.
 - Official VAD docs list Silero VAD and TEN VAD. Silero is MIT licensed; TEN VAD uses a modified Apache 2.0 license, so production use needs license review.
@@ -120,7 +120,7 @@ Recommendation:
 
 | Stack | Latest checked version/state | Fit for VoiceKit | Tradeoffs |
 | --- | --- | --- | --- |
-| Sherpa-ONNX Go | `v1.13.3` Go module and upstream release | Best primary stack | CGO and model-path management, but typed Go bindings cover ASR, VAD, speaker embeddings, diarization, and TTS. |
+| Sherpa-ONNX Go | Repository-pinned `v1.13.4` | Best primary stack | CGO and model-path management, but typed Go bindings cover ASR, VAD, speaker embeddings, diarization, denoising, and TTS. |
 | whisper.cpp Go bindings | upstream `v1.9.1` release; Go package exists under whisper.cpp bindings | Good ASR fallback for offline/batch transcription | Strong local Whisper ecosystem, but not a complete voice stack; streaming/diarization/VAD need extra components. |
 | Vosk Go | Go module tags through `v0.3.50`; GitHub release page is older than module tags | Lightweight ASR fallback for constrained streaming | Mature offline ASR with small models and Go bindings, but lower modern-model ceiling than Sherpa/Whisper. |
 | pyannote.audio | `4.0.7` latest checked tag; `community-1` open-source model launched with pyannote 4.0 | Best diarization benchmark/sidecar, not in-process Go | Python/PyTorch/Hugging Face oriented; useful as evaluator or optional sidecar, not the core Go library dependency. |
