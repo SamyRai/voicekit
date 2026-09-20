@@ -271,9 +271,6 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	// VADService and passes only its own incremental samples.
 	audioForASR := audio
 	if s.vadConfig != nil {
-		if session.acceptedSamples == 0 {
-			appendPendingAudio(session, audio)
-		}
 		vadService, err := s.vadForSession(session)
 		if err != nil {
 			return nil, newSessionError("vad_initialization", sessionID, err)
@@ -287,7 +284,7 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 		if vadResult.IsEndpoint {
 			finalOperation = true
 			if session.acceptedSamples == 0 {
-				audioForASR = pendingAudioSamples(session)
+				audioForASR = pendingAudioWithCurrent(session, audio)
 			}
 			transcription, err := s.finalizeTranscription(ctx, session, audioForASR)
 			if err != nil {
@@ -297,10 +294,11 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 		}
 
 		if session.acceptedSamples == 0 && !vadResult.IsSpeech {
+			appendPendingAudio(session, audio)
 			return emptyFinalTranscription(state.Language), nil
 		}
 		if session.acceptedSamples == 0 {
-			audioForASR = pendingAudioSamples(session)
+			audioForASR = pendingAudioWithCurrent(session, audio)
 		}
 	}
 
@@ -505,11 +503,14 @@ func appendPendingAudio(session *Session, audio []float32) {
 	}
 }
 
-func pendingAudioSamples(session *Session) []float32 {
+func pendingAudioWithCurrent(session *Session, current []float32) []float32 {
 	if session == nil || session.pendingAudio == nil {
-		return nil
+		return current
 	}
-	return session.pendingAudio.samples
+	combined := make([]float32, 0, len(session.pendingAudio.samples)+len(current))
+	combined = append(combined, session.pendingAudio.samples...)
+	combined = append(combined, current...)
+	return combined
 }
 
 func resetSessionUtterance(session *Session) error {

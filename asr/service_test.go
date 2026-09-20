@@ -368,6 +368,35 @@ func TestASRServicePreservesVADPreRollUntilSpeechActivation(t *testing.T) {
 	}
 }
 
+func TestASRServicePreservesCompleteLargeVADActivationChunk(t *testing.T) {
+	service := newTestService()
+	defer service.Close()
+	model := &finalizableTestModel{
+		testModel: testModel{name: "fake", language: "en", quantization: "int8"},
+	}
+	if err := service.RegisterModel(model); err != nil {
+		t.Fatalf("failed to register model: %v", err)
+	}
+
+	config := &VADConfig{Provider: VADProviderEnergy, SampleRate: 16000}
+	service.vadConfig = config
+	service.vadPrototype = &VADService{
+		config:   config,
+		detector: &sequenceVADDetector{speech: []bool{true}},
+	}
+
+	audio := make([]float32, service.streaming.config.BufferSize+17)
+	for i := range audio {
+		audio[i] = float32(i + 1)
+	}
+	if _, err := service.ProcessAudioChunk(context.Background(), "large-vad-activation", audio); err != nil {
+		t.Fatalf("process activation chunk: %v", err)
+	}
+	if !slices.Equal(model.processedAudio, audio) {
+		t.Fatalf("ASR received %d samples, want complete %d-sample activation chunk", len(model.processedAudio), len(audio))
+	}
+}
+
 func TestASRServiceDiscardsNativeStateWhenProcessingIsCanceledAfterAcceptance(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	recognizer := &fakeOnlineRecognizer{ready: true, onAccept: cancel}

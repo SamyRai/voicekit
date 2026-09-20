@@ -1,8 +1,10 @@
 package asr
 
 import (
-	"go.glpx.pro/voicekit/types"
+	"slices"
 	"testing"
+
+	"go.glpx.pro/voicekit/types"
 )
 
 func TestAudioBuffer_Append(t *testing.T) {
@@ -69,5 +71,29 @@ func TestAudioBuffer_Overflow(t *testing.T) {
 	// Buffer should have shifted and contain the most recent data
 	if buffer.Size() != 32000 {
 		t.Errorf("Expected buffer size 32000 after overflow, got %d", buffer.Size())
+	}
+}
+
+func TestAudioBufferAppendAfterOversizedChunkWrapsWriteIndex(t *testing.T) {
+	config := &types.StreamingConfig{
+		ChunkSize:   4,
+		OverlapSize: 1,
+		BufferSize:  8,
+		SampleRate:  16000,
+	}
+	buffer := NewAudioBuffer(config)
+
+	if err := buffer.Append([]float32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}); err != nil {
+		t.Fatalf("append oversized chunk: %v", err)
+	}
+	if err := buffer.Append([]float32{11, 12}); err != nil {
+		t.Fatalf("append after oversized chunk: %v", err)
+	}
+
+	got := buffer.GetRecentChunk()
+	defer buffer.ReturnBuffer(got)
+	want := []float32{9, 10, 11, 12}
+	if !slices.Equal(got, want) {
+		t.Fatalf("recent chunk = %v, want %v", got, want)
 	}
 }
