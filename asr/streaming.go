@@ -2,6 +2,7 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,15 +10,20 @@ import (
 	"go.glpx.pro/voicekit/types"
 )
 
+var errSessionRetired = errors.New("streaming session is no longer active")
+
 // StreamingManager handles streaming ASR sessions
 type StreamingManager struct {
 	config        *types.StreamingConfig
 	sessions      map[string]*Session
+	activeStreams int
+	maxStreams    int
 	mu            sync.RWMutex
 	metrics       *StreamingMetrics
 	cleanupTicker *time.Ticker
 	ctx           context.Context
 	cancel        context.CancelFunc
+	closed        bool
 }
 
 // Session represents a streaming ASR session
@@ -40,6 +46,41 @@ type Session struct {
 	// language changes (see Service.modelForSession). Guarded by mu.
 	asrModel         Model
 	asrModelLanguage string
+
+	// vadService is owned by this session. Neural VAD detectors retain waveform
+	// and endpoint state, so sharing one detector between session IDs would mix
+	// unrelated callers. Guarded by mu.
+	vadService *VADService
+
+	// acceptedSamples tracks audio submitted to the ASR model in the current
+	// utterance. The rolling Buffer is retained for compatibility with custom
+	// non-finalizable models, but it is not the source of truth for native
+	// streaming progress. Guarded by mu.
+	acceptedSamples int64
+
+	// pendingAudio retains a bounded pre-roll until VAD first reports speech.
+	// Once an utterance has started, every new chunk is sent directly to ASR.
+	// Guarded by mu.
+	pendingAudio *vadPreRoll
+
+	// retired prevents operations that were admitted before removal, expiry, or
+	// manager shutdown from recreating native resources on an unlinked session.
+	// Guarded by mu.
+	retired bool
+
+	// admitted records whether this session currently occupies one configured
+	// concurrent-stream slot. Guarded by the manager's mu.
+	admitted bool
+
+	// operations counts processing/finalization calls that acquired this session
+	// but have not completed. It prevents one final call from releasing the slot
+	// underneath another same-session call already queued on mu. Guarded by the
+	// manager's mu.
+	operations int
+}
+
+type vadPreRoll struct {
+	samples []float32
 }
 
 // Use StreamingConfig from types package
@@ -57,26 +98,32 @@ type StreamingMetrics struct {
 func NewStreamingManager(config *types.StreamingConfig) *StreamingManager {
 	if config == nil {
 		config = &types.StreamingConfig{
-			ChunkSize:          16000,
-			OverlapSize:        1600,
-			BufferSize:         48000,
-			SampleRate:         16000,
-			StreamTimeout:      5 * time.Minute,
-			IdleTimeout:        30 * time.Second,
-			FlushInterval:      100 * time.Millisecond,
-			PartialResults:     true,
-			StabilityThreshold: 0.8,
-			MinConfidence:      0.5,
+			MaxConcurrentStreams: 10,
+			ChunkSize:            16000,
+			OverlapSize:          1600,
+			BufferSize:           48000,
+			SampleRate:           16000,
+			StreamTimeout:        5 * time.Minute,
+			IdleTimeout:          30 * time.Second,
+			FlushInterval:        100 * time.Millisecond,
+			PartialResults:       true,
+			StabilityThreshold:   0.8,
+			MinConfidence:        0.5,
 		}
+	}
+	maxStreams := config.MaxConcurrentStreams
+	if maxStreams <= 0 {
+		maxStreams = 10
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &StreamingManager{
-		config:   config,
-		sessions: make(map[string]*Session),
-		metrics:  &StreamingMetrics{},
-		ctx:      ctx,
-		cancel:   cancel,
+		config:     config,
+		sessions:   make(map[string]*Session),
+		maxStreams: maxStreams,
+		metrics:    &StreamingMetrics{},
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	// Start cleanup routine
@@ -85,18 +132,44 @@ func NewStreamingManager(config *types.StreamingConfig) *StreamingManager {
 	return manager
 }
 
-// getOrCreateSession returns the session for sessionID, creating it if absent,
-// and marks it active. Callers must hold the returned session's mutex while
-// operating on its State so those operations are serialized with idle cleanup.
-func (m *StreamingManager) getOrCreateSession(sessionID string) *Session {
+// getOrCreateSession returns and admits the session for sessionID, creating it
+// if absent. Callers must hold the returned session's mutex while operating on
+// its State so those operations are serialized with idle cleanup.
+func (m *StreamingManager) getOrCreateSession(sessionID string) (*Session, error) {
+	return m.admitSession(sessionID, false)
+}
+
+// acquireSession admits a session and records one queued/in-flight operation.
+// The caller must pair it with completeSessionOperation.
+func (m *StreamingManager) acquireSession(sessionID string) (*Session, error) {
+	return m.admitSession(sessionID, true)
+}
+
+func (m *StreamingManager) admitSession(sessionID string, trackOperation bool) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, fmt.Errorf("streaming manager is closed")
+	}
 
+	now := time.Now()
 	session, exists := m.sessions[sessionID]
+	if exists && session.admitted {
+		session.LastActivity = now
+		session.State.LastActivity = now
+		if trackOperation {
+			session.operations++
+		}
+		return session, nil
+	}
+	if m.activeStreams >= m.maxStreams {
+		return nil, &StreamCapacityError{Limit: m.maxStreams, Active: m.activeStreams}
+	}
+
 	if !exists {
 		session = &Session{
 			ID:      sessionID,
-			Created: time.Now(),
+			Created: now,
 			Config:  m.config,
 		}
 		session.LastActivity = session.Created
@@ -109,32 +182,52 @@ func (m *StreamingManager) getOrCreateSession(sessionID string) *Session {
 		}
 
 		m.sessions[sessionID] = session
-
-		if m.metrics.ActiveSessions != nil {
-			m.metrics.ActiveSessions.Inc()
-		}
 	} else {
-		session.LastActivity = time.Now()
-		session.State.LastActivity = session.LastActivity
+		session.Created = now
+		session.LastActivity = now
+		session.State.LastActivity = now
 	}
 
-	return session
+	session.admitted = true
+	m.activeStreams++
+	if m.metrics.ActiveSessions != nil {
+		m.metrics.ActiveSessions.Inc()
+	}
+	if trackOperation {
+		session.operations++
+	}
+
+	return session, nil
 }
 
 // GetState gets or creates a streaming state for a session.
 func (m *StreamingManager) GetState(sessionID string) (*types.StreamingState, error) {
-	return m.getOrCreateSession(sessionID).State, nil
+	session, err := m.getOrCreateSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return session.State, nil
 }
 
 // setSessionLanguage sets the language on sessionID's StreamingState,
 // creating the session if it does not exist yet. It holds the session's own
 // mutex so it cannot race with an in-flight ProcessAudioChunk/FinishStream
 // call or idle cleanup on the same session.
-func (m *StreamingManager) setSessionLanguage(sessionID, language string) {
-	session := m.getOrCreateSession(sessionID)
+func (m *StreamingManager) setSessionLanguage(sessionID, language string) error {
+	session, err := m.acquireSession(sessionID)
+	if err != nil {
+		return err
+	}
 	session.mu.Lock()
-	defer session.mu.Unlock()
+	defer func() {
+		m.completeSessionOperation(session, false)
+		session.mu.Unlock()
+	}()
+	if session.retired {
+		return fmt.Errorf("streaming session %s is no longer active: %w", sessionID, errSessionRetired)
+	}
 	session.State.Language = language
+	return nil
 }
 
 // sessionForFinalize returns an existing session, marking it active so an
@@ -150,6 +243,7 @@ func (m *StreamingManager) sessionForFinalize(sessionID string) (*Session, bool)
 	if !exists {
 		return nil, false
 	}
+	session.operations++
 	session.LastActivity = time.Now()
 	session.State.LastActivity = session.LastActivity
 	return session, true
@@ -171,18 +265,17 @@ func (m *StreamingManager) RemoveSession(sessionID string) error {
 	}
 
 	delete(m.sessions, sessionID)
-
-	if m.metrics.ActiveSessions != nil {
-		m.metrics.ActiveSessions.Dec()
-	}
 	m.mu.Unlock()
 
 	// Close outside the manager lock, under the session lock, so an in-flight
 	// process/finalize on this session finishes before its ASR state is closed.
 	session.mu.Lock()
-	defer session.mu.Unlock()
-	if err := closeASRState(session.State); err != nil {
-		return fmt.Errorf("failed to close session ASR state: %w", err)
+	session.retired = true
+	err := closeSessionResources(session)
+	session.mu.Unlock()
+	m.releaseSession(session)
+	if err != nil {
+		return fmt.Errorf("failed to close session resources: %w", err)
 	}
 
 	return nil
@@ -192,7 +285,45 @@ func (m *StreamingManager) RemoveSession(sessionID string) error {
 func (m *StreamingManager) GetActiveSessions() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.sessions)
+	return m.activeStreams
+}
+
+// releaseSession returns a finalized session's admission slot while retaining
+// its metadata (including language selection) for later utterances.
+func (m *StreamingManager) releaseSession(session *Session) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.releaseSessionLocked(session)
+}
+
+// completeSessionOperation releases one queued/in-flight operation. A final
+// operation returns the admission slot only when no same-session operation is
+// still queued, so capacity cannot be released underneath serialized work.
+func (m *StreamingManager) completeSessionOperation(session *Session, final bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if session == nil {
+		return
+	}
+	if session.operations > 0 {
+		session.operations--
+	}
+	if final && session.operations == 0 {
+		m.releaseSessionLocked(session)
+	}
+}
+
+func (m *StreamingManager) releaseSessionLocked(session *Session) {
+	if session == nil || !session.admitted {
+		return
+	}
+	session.admitted = false
+	if m.activeStreams > 0 {
+		m.activeStreams--
+	}
+	if m.metrics.ActiveSessions != nil {
+		m.metrics.ActiveSessions.Dec()
+	}
 }
 
 // Close closes the streaming manager
@@ -203,6 +334,11 @@ func (m *StreamingManager) Close() error {
 	}
 
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	m.closed = true
 	sessions := make([]*Session, 0, len(m.sessions))
 	for sessionID, session := range m.sessions {
 		sessions = append(sessions, session)
@@ -210,15 +346,17 @@ func (m *StreamingManager) Close() error {
 	}
 	m.mu.Unlock()
 
-	// Close each session's ASR state under its own lock so a concurrent
+	// Close each session's native resources under its own lock so a concurrent
 	// process/finalize on that session cannot race with the close.
 	var errs []error
 	for _, session := range sessions {
 		session.mu.Lock()
-		if err := closeASRState(session.State); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close session %s ASR state: %w", session.ID, err))
+		session.retired = true
+		if err := closeSessionResources(session); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close session %s resources: %w", session.ID, err))
 		}
 		session.mu.Unlock()
+		m.releaseSession(session)
 	}
 
 	if len(errs) > 0 {
@@ -270,17 +408,53 @@ func (m *StreamingManager) cleanupExpiredSessions() {
 		if m.metrics.SessionDuration != nil {
 			m.metrics.SessionDuration.Observe(time.Since(session.Created).Seconds())
 		}
-		if m.metrics.ActiveSessions != nil {
-			m.metrics.ActiveSessions.Dec()
-		}
 	}
 	m.mu.Unlock()
 
 	for _, session := range expired {
 		session.mu.Lock()
-		_ = closeASRState(session.State)
+		session.retired = true
+		_ = closeSessionResources(session)
 		session.mu.Unlock()
+		m.releaseSession(session)
 	}
+}
+
+func closeSessionResources(session *Session) error {
+	if session == nil {
+		return nil
+	}
+
+	var errs []error
+	if err := closeBoundASRState(session); err != nil {
+		errs = append(errs, fmt.Errorf("close ASR state: %w", err))
+	}
+	if session.vadService != nil {
+		if err := session.vadService.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close VAD state: %w", err))
+		}
+		session.vadService = nil
+	}
+	session.acceptedSamples = 0
+	session.pendingAudio = nil
+	if session.State != nil && session.State.Buffer != nil {
+		session.State.Buffer.Reset()
+	}
+	return errors.Join(errs...)
+}
+
+type stateDiscarder interface {
+	discardState(*types.StreamingState) error
+}
+
+func closeBoundASRState(session *Session) error {
+	if session == nil || session.State == nil || session.State.ASRState == nil {
+		return nil
+	}
+	if discarder, ok := session.asrModel.(stateDiscarder); ok {
+		return discarder.discardState(session.State)
+	}
+	return closeASRState(session.State)
 }
 
 func closeASRState(state *types.StreamingState) error {

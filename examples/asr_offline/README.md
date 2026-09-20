@@ -40,3 +40,7 @@ export VOICEKIT_OFFLINE_ASR_SAMPLE_RATE=16000
 ```
 
 If required variables are missing, the example exits cleanly and prints the required settings.
+
+Sherpa token text and timing are returned in `Transcription.Tokens`. Model
+tokens may be characters or subwords, so VoiceKit does not populate
+`Transcription.Words` without a real word-segmentation stage.

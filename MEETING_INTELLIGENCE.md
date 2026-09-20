@@ -287,6 +287,8 @@ This keeps product-quality scoring outside the core artifact model.
 3. Computes transcript WER and CER.
 4. Computes turn-level speaker attribution accuracy.
 5. Computes action-item precision, recall, and F1.
+6. Computes diarization error rate when the reference contains timed,
+   speaker-attributed turns.
 
 Transcript metrics concatenate non-empty turn text from the reference and
 prediction. Normalization lowercases text, trims it, preserves letters and
@@ -306,12 +308,15 @@ divided by audio seconds. It rejects negative processing duration and
 non-positive audio duration with `ErrInvalidDuration`. Use
 `EvaluateRealTimeFactor` to attach that number to an existing report.
 
+`EvaluateDiarization` is also available directly for segment-level scoring. It
+uses optimal hypothesis-to-reference speaker mapping and reports missed speech,
+false alarm, confusion, and total DER. `DiarizationOptions` supports a boundary
+collar and optional overlap exclusion.
+
 ### Evaluation Limits
 
 The package is a deterministic fixture harness. It does not yet provide:
 
-- diarization error rate
-- overlap-aware speaker scoring
 - semantic action-item matching
 - latency distribution summaries
 - memory metrics

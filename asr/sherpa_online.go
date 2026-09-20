@@ -2,6 +2,7 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -49,8 +50,9 @@ type sherpaOnlineStream struct {
 }
 
 type onlineSession struct {
-	stream onlineStream
-	closed bool
+	stream          onlineStream
+	acceptedSamples int64
+	closed          bool
 }
 
 // NewSherpaOnlineModel builds a SherpaOnlineModel from the legacy single
@@ -179,7 +181,7 @@ func (m *SherpaOnlineModel) FinishAudio(ctx context.Context, audio []float32, st
 }
 
 func (m *SherpaOnlineModel) processAudio(ctx context.Context, audio []float32, state *types.StreamingState, finish bool) (*types.Transcription, error) {
-	state, closeAfter, err := m.prepareProcessState(ctx, audio, state)
+	state, closeAfter, err := m.prepareProcessState(ctx, audio, state, finish)
 	if err != nil {
 		return nil, err
 	}
@@ -189,11 +191,11 @@ func (m *SherpaOnlineModel) processAudio(ctx context.Context, audio []float32, s
 	return m.processAudioLocked(ctx, audio, state, finish, closeAfter)
 }
 
-func (m *SherpaOnlineModel) prepareProcessState(ctx context.Context, audio []float32, state *types.StreamingState) (*types.StreamingState, bool, error) {
+func (m *SherpaOnlineModel) prepareProcessState(ctx context.Context, audio []float32, state *types.StreamingState, finish bool) (*types.StreamingState, bool, error) {
 	if ctx == nil {
 		return nil, false, fmt.Errorf("context cannot be nil")
 	}
-	if len(audio) == 0 {
+	if len(audio) == 0 && !finish {
 		return nil, false, fmt.Errorf("audio cannot be empty")
 	}
 	localState := state == nil
@@ -225,8 +227,11 @@ func (m *SherpaOnlineModel) processAudioLocked(ctx context.Context, audio []floa
 		}()
 	}
 
-	if err := session.stream.AcceptWaveform(m.sampleRate, audio); err != nil {
-		return nil, err
+	if len(audio) > 0 {
+		if err := session.stream.AcceptWaveform(m.sampleRate, audio); err != nil {
+			return nil, err
+		}
+		session.acceptedSamples += int64(len(audio))
 	}
 	if finish {
 		if err := session.stream.InputFinished(); err != nil {
@@ -239,13 +244,15 @@ func (m *SherpaOnlineModel) processAudioLocked(ctx context.Context, audio []floa
 		return nil, err
 	}
 
+	transcription := m.transcriptionFromOnlineResult(result, session.acceptedSamples, finish, isEndpoint)
 	if isEndpoint && !finish {
 		if err := m.recognizer.Reset(session.stream); err != nil {
 			return nil, err
 		}
+		session.acceptedSamples = 0
 	}
 
-	return m.transcriptionFromOnlineResult(result, audio, finish, isEndpoint), nil
+	return transcription, nil
 }
 
 func (m *SherpaOnlineModel) decodeSessionLocked(ctx context.Context, session *onlineSession) (*sherpa.OnlineRecognizerResult, bool, error) {
@@ -268,7 +275,7 @@ func (m *SherpaOnlineModel) decodeSessionLocked(ctx context.Context, session *on
 	return result, m.recognizer.IsEndpoint(session.stream), nil
 }
 
-func (m *SherpaOnlineModel) transcriptionFromOnlineResult(result *sherpa.OnlineRecognizerResult, audio []float32, finish bool, isEndpoint bool) *types.Transcription {
+func (m *SherpaOnlineModel) transcriptionFromOnlineResult(result *sherpa.OnlineRecognizerResult, acceptedSamples int64, finish bool, isEndpoint bool) *types.Transcription {
 	return &types.Transcription{
 		Text:       result.Text,
 		IsPartial:  !finish && !isEndpoint,
@@ -276,8 +283,8 @@ func (m *SherpaOnlineModel) transcriptionFromOnlineResult(result *sherpa.OnlineR
 		Language:   m.language,
 		Timestamp:  time.Now(),
 		StartTime:  0,
-		EndTime:    time.Duration(len(audio)) * time.Second / time.Duration(m.sampleRate),
-		Words:      wordsFromOnlineResult(result),
+		EndTime:    time.Duration(acceptedSamples) * time.Second / time.Duration(m.sampleRate),
+		Tokens:     tokensFromOnlineResult(result),
 	}
 }
 
@@ -312,6 +319,27 @@ func (m *SherpaOnlineModel) closeSessionLocked(session *onlineSession) error {
 	return err
 }
 
+// discardState closes and deregisters a state-owned native stream after the
+// service aborts an utterance. It complements FinishAudio, which performs the
+// same cleanup on the normal finalization path.
+func (m *SherpaOnlineModel) discardState(state *types.StreamingState) error {
+	if state == nil || state.ASRState == nil {
+		return nil
+	}
+	session, ok := state.ASRState.(*onlineSession)
+	if !ok {
+		return closeASRState(state)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	err := m.closeSessionLocked(session)
+	if state.ASRState == session {
+		state.ASRState = nil
+	}
+	return err
+}
+
 func (m *SherpaOnlineModel) SupportsLanguage(lang string) bool {
 	if lang == "" || m.language == "" || m.language == "auto" || m.language == "multi" || m.language == "all" {
 		return true
@@ -329,20 +357,21 @@ func (m *SherpaOnlineModel) Close() error {
 	if m.closed {
 		return nil
 	}
+	var errs []error
 	for session := range m.sessions {
 		if err := session.Close(); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 		delete(m.sessions, session)
 	}
 	if m.recognizer != nil {
 		if err := m.recognizer.Close(); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 		m.recognizer = nil
 	}
 	m.closed = true
-	return nil
+	return errors.Join(errs...)
 }
 
 func (r *sherpaOnlineRecognizer) NewStream() (onlineStream, error) {
@@ -446,30 +475,21 @@ func nativeOnlineStream(stream onlineStream) (*sherpa.OnlineStream, error) {
 	return sherpaStream.stream, nil
 }
 
-func wordsFromOnlineResult(result *sherpa.OnlineRecognizerResult) []types.Word {
-	if result == nil || len(result.Tokens) == 0 || len(result.Timestamps) == 0 {
+func tokensFromOnlineResult(result *sherpa.OnlineRecognizerResult) []types.Token {
+	if result == nil || len(result.Tokens) == 0 {
 		return nil
 	}
 
-	n := len(result.Tokens)
-	if len(result.Timestamps) < n {
-		n = len(result.Timestamps)
-	}
-	words := make([]types.Word, 0, n)
-	for i := 0; i < n; i++ {
-		start := time.Duration(result.Timestamps[i] * float32(time.Second))
-		end := start
-		if i+1 < len(result.Timestamps) {
-			end = time.Duration(result.Timestamps[i+1] * float32(time.Second))
+	tokens := make([]types.Token, 0, len(result.Tokens))
+	for i, text := range result.Tokens {
+		token := types.Token{Text: text}
+		if i < len(result.Timestamps) {
+			token.HasTiming = true
+			token.StartTime = time.Duration(result.Timestamps[i] * float32(time.Second))
 		}
-		words = append(words, types.Word{
-			Text:       result.Tokens[i],
-			StartTime:  start,
-			EndTime:    end,
-			Confidence: 0,
-		})
+		tokens = append(tokens, token)
 	}
-	return words
+	return tokens
 }
 
 func boolToInt(v bool) int {

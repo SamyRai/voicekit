@@ -55,6 +55,10 @@ To use VAD, configure `VADProvider` as `energy`, `silero_vad`, or `ten_vad`. She
 ## Notes
 
 - Output quality and latency depend on the model and runtime provider.
-- VoiceKit keeps one Sherpa online stream per `sessionID` across chunks. Endpoint/finalization clears that stream so the next utterance starts fresh.
+- VoiceKit keeps one Sherpa online stream and, when configured, one stateful VAD detector per `sessionID`.
+- With VAD enabled, VoiceKit retains bounded pre-roll until speech activation; after activation, each supplied sample is accepted exactly once. `FinishStream` signals `InputFinished` without replaying accepted audio, then clears ASR and VAD state so the next utterance starts fresh.
+- Finalization, removal, timeout, shutdown, and terminal processing errors close native state before returning an admission slot.
+- `MaxConcurrentStreams` is enforced for active session streams. A final result returns the slot; excess new sessions return a wrapped `*asr.StreamCapacityError` discoverable with `errors.As`.
+- `Transcription.Tokens` contains model-native tokens and optional timing. Tokens may be subwords; `Transcription.Words` remains empty until real word segmentation exists.
 - Confidence is `0` when the Sherpa binding does not expose calibrated confidence.
 - TTS is not part of this example; see `examples/tts_offline/` for offline speech synthesis.
