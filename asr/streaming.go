@@ -10,6 +10,8 @@ import (
 	"go.glpx.pro/voicekit/types"
 )
 
+var errSessionRetired = errors.New("streaming session is no longer active")
+
 // StreamingManager handles streaming ASR sessions
 type StreamingManager struct {
 	config        *types.StreamingConfig
@@ -56,6 +58,16 @@ type Session struct {
 	// streaming progress. Guarded by mu.
 	acceptedSamples int64
 
+	// pendingAudio retains a bounded pre-roll until VAD first reports speech.
+	// Once an utterance has started, every new chunk is sent directly to ASR.
+	// Guarded by mu.
+	pendingAudio *vadPreRoll
+
+	// retired prevents operations that were admitted before removal, expiry, or
+	// manager shutdown from recreating native resources on an unlinked session.
+	// Guarded by mu.
+	retired bool
+
 	// admitted records whether this session currently occupies one configured
 	// concurrent-stream slot. Guarded by the manager's mu.
 	admitted bool
@@ -65,6 +77,10 @@ type Session struct {
 	// underneath another same-session call already queued on mu. Guarded by the
 	// manager's mu.
 	operations int
+}
+
+type vadPreRoll struct {
+	samples []float32
 }
 
 // Use StreamingConfig from types package
@@ -204,9 +220,12 @@ func (m *StreamingManager) setSessionLanguage(sessionID, language string) error 
 	}
 	session.mu.Lock()
 	defer func() {
-		session.mu.Unlock()
 		m.completeSessionOperation(session, false)
+		session.mu.Unlock()
 	}()
+	if session.retired {
+		return fmt.Errorf("streaming session %s is no longer active: %w", sessionID, errSessionRetired)
+	}
 	session.State.Language = language
 	return nil
 }
@@ -251,6 +270,7 @@ func (m *StreamingManager) RemoveSession(sessionID string) error {
 	// Close outside the manager lock, under the session lock, so an in-flight
 	// process/finalize on this session finishes before its ASR state is closed.
 	session.mu.Lock()
+	session.retired = true
 	err := closeSessionResources(session)
 	session.mu.Unlock()
 	m.releaseSession(session)
@@ -331,6 +351,7 @@ func (m *StreamingManager) Close() error {
 	var errs []error
 	for _, session := range sessions {
 		session.mu.Lock()
+		session.retired = true
 		if err := closeSessionResources(session); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close session %s resources: %w", session.ID, err))
 		}
@@ -392,6 +413,7 @@ func (m *StreamingManager) cleanupExpiredSessions() {
 
 	for _, session := range expired {
 		session.mu.Lock()
+		session.retired = true
 		_ = closeSessionResources(session)
 		session.mu.Unlock()
 		m.releaseSession(session)
@@ -404,7 +426,7 @@ func closeSessionResources(session *Session) error {
 	}
 
 	var errs []error
-	if err := closeASRState(session.State); err != nil {
+	if err := closeBoundASRState(session); err != nil {
 		errs = append(errs, fmt.Errorf("close ASR state: %w", err))
 	}
 	if session.vadService != nil {
@@ -414,7 +436,25 @@ func closeSessionResources(session *Session) error {
 		session.vadService = nil
 	}
 	session.acceptedSamples = 0
+	session.pendingAudio = nil
+	if session.State != nil && session.State.Buffer != nil {
+		session.State.Buffer.Reset()
+	}
 	return errors.Join(errs...)
+}
+
+type stateDiscarder interface {
+	discardState(*types.StreamingState) error
+}
+
+func closeBoundASRState(session *Session) error {
+	if session == nil || session.State == nil || session.State.ASRState == nil {
+		return nil
+	}
+	if discarder, ok := session.asrModel.(stateDiscarder); ok {
+		return discarder.discardState(session.State)
+	}
+	return closeASRState(session.State)
 }
 
 func closeASRState(state *types.StreamingState) error {

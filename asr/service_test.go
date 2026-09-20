@@ -339,6 +339,71 @@ func TestASRServiceUsesOneVADPerSessionAndFeedsIncrementalAudio(t *testing.T) {
 	}
 }
 
+func TestASRServicePreservesVADPreRollUntilSpeechActivation(t *testing.T) {
+	service := newTestService()
+	defer service.Close()
+	model := &finalizableTestModel{
+		testModel: testModel{name: "fake", language: "en", quantization: "int8"},
+	}
+	if err := service.RegisterModel(model); err != nil {
+		t.Fatalf("failed to register model: %v", err)
+	}
+
+	config := &VADConfig{Provider: VADProviderEnergy, SampleRate: 16000}
+	detector := &sequenceVADDetector{speech: []bool{false, false, true}}
+	service.vadConfig = config
+	service.vadPrototype = &VADService{config: config, detector: detector}
+
+	for _, chunk := range [][]float32{{1}, {2}, {3}} {
+		if _, err := service.ProcessAudioChunk(context.Background(), "delayed-speech", chunk); err != nil {
+			t.Fatalf("process chunk %v: %v", chunk, err)
+		}
+	}
+
+	if model.processCalls != 1 {
+		t.Fatalf("model process calls = %d, want 1 after VAD activation", model.processCalls)
+	}
+	if want := []float32{1, 2, 3}; !slices.Equal(model.processedAudio, want) {
+		t.Fatalf("ASR samples = %v, want VAD pre-roll %v", model.processedAudio, want)
+	}
+}
+
+func TestASRServiceDiscardsNativeStateWhenProcessingIsCanceledAfterAcceptance(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	recognizer := &fakeOnlineRecognizer{ready: true, onAccept: cancel}
+	model := newSherpaOnlineModelForTest(recognizer)
+
+	service := newTestServiceWithCapacity(1)
+	service.config.DefaultModel = model.Name()
+	defer service.Close()
+	if err := service.RegisterModel(model); err != nil {
+		t.Fatalf("failed to register model: %v", err)
+	}
+
+	if _, err := service.ProcessAudioChunk(ctx, "canceled", []float32{1, 2}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("processing error = %v, want context cancellation", err)
+	}
+	if len(recognizer.streams) != 1 || recognizer.streams[0].closeCount != 1 {
+		t.Fatalf("canceled native stream was not closed exactly once: %+v", recognizer.streams)
+	}
+	if len(model.sessions) != 0 {
+		t.Fatalf("canceled native session remains registered: %d", len(model.sessions))
+	}
+	service.streaming.mu.RLock()
+	session := service.streaming.sessions["canceled"]
+	service.streaming.mu.RUnlock()
+	session.mu.Lock()
+	state := session.State.ASRState
+	session.mu.Unlock()
+	if state != nil {
+		t.Fatalf("canceled ASR state was retained: %T", state)
+	}
+	recognizer.ready = false
+	if _, err := service.ProcessAudioChunk(context.Background(), "replacement", []float32{3}); err != nil {
+		t.Fatalf("canceled operation must release capacity after cleanup: %v", err)
+	}
+}
+
 func TestSherpaOnlineModelReusesNativeStreamAcrossChunks(t *testing.T) {
 	recognizer := &fakeOnlineRecognizer{}
 	model := newSherpaOnlineModelForTest(recognizer)
@@ -675,7 +740,9 @@ func TestStreamingManagerKeepsCapacityForQueuedSameSessionOperation(t *testing.T
 		t.Fatal("same session ID must reuse one session")
 	}
 
+	first.mu.Lock()
 	manager.completeSessionOperation(first, true)
+	first.mu.Unlock()
 	if _, err := manager.getOrCreateSession("two"); err == nil {
 		t.Fatal("a queued same-session operation must retain the admission slot")
 	} else {
@@ -685,9 +752,46 @@ func TestStreamingManagerKeepsCapacityForQueuedSameSessionOperation(t *testing.T
 		}
 	}
 
-	manager.completeSessionOperation(second, true)
+	second.mu.Lock()
+	manager.completeSessionOperation(second, false)
+	second.mu.Unlock()
+	if _, err := manager.getOrCreateSession("two"); err == nil {
+		t.Fatal("a partial operation after finalization must retain the admission slot")
+	}
+
+	last, err := manager.acquireSession("one")
+	if err != nil {
+		t.Fatalf("acquire final operation: %v", err)
+	}
+	last.mu.Lock()
+	manager.completeSessionOperation(last, true)
+	last.mu.Unlock()
 	if _, err := manager.getOrCreateSession("two"); err != nil {
-		t.Fatalf("last final operation should release the slot: %v", err)
+		t.Fatalf("a final operation with no queued successor should release the slot: %v", err)
+	}
+}
+
+func TestStreamingManagerRetiresAcquiredSessionBeforeRemovalCleanup(t *testing.T) {
+	manager := NewStreamingManager(nil)
+	defer manager.Close()
+
+	session, err := manager.acquireSession("retired")
+	if err != nil {
+		t.Fatalf("acquire session: %v", err)
+	}
+	if err := manager.RemoveSession("retired"); err != nil {
+		t.Fatalf("remove session: %v", err)
+	}
+
+	session.mu.Lock()
+	retired := session.retired
+	manager.completeSessionOperation(session, false)
+	session.mu.Unlock()
+	if !retired {
+		t.Fatal("an unlinked session must be retired before queued work resumes")
+	}
+	if got := manager.GetActiveSessions(); got != 0 {
+		t.Fatalf("active streams = %d, want 0 after removal", got)
 	}
 }
 
@@ -819,13 +923,15 @@ func (m *testModel) ProcessAudio(ctx context.Context, audio []float32, state *ty
 
 type finalizableTestModel struct {
 	testModel
-	processCalls int
-	finishCalls  int
-	finishAudio  []float32
+	processCalls   int
+	finishCalls    int
+	processedAudio []float32
+	finishAudio    []float32
 }
 
 func (m *finalizableTestModel) ProcessAudio(ctx context.Context, audio []float32, state *types.StreamingState) (*types.Transcription, error) {
 	m.processCalls++
+	m.processedAudio = append(m.processedAudio, audio...)
 	return m.testModel.ProcessAudio(ctx, audio, state)
 }
 
@@ -844,6 +950,20 @@ type recordingVADDetector struct {
 	calls  [][]float32
 	closed bool
 }
+
+type sequenceVADDetector struct {
+	speech []bool
+	calls  int
+}
+
+func (d *sequenceVADDetector) Process(_ []float32, state any) (*types.VADResult, error) {
+	index := d.calls
+	d.calls++
+	isSpeech := index < len(d.speech) && d.speech[index]
+	return &types.VADResult{IsSpeech: isSpeech, State: state}, nil
+}
+
+func (d *sequenceVADDetector) Close() error { return nil }
 
 func (d *recordingVADDetector) Process(audio []float32, state any) (*types.VADResult, error) {
 	d.calls = append(d.calls, append([]float32(nil), audio...))
@@ -882,12 +1002,14 @@ type fakeOnlineRecognizer struct {
 	resetCount     int
 	closeCount     int
 	endpoint       bool
+	ready          bool
+	onAccept       func()
 	result         *sherpa.OnlineRecognizerResult
 }
 
 func (r *fakeOnlineRecognizer) NewStream() (onlineStream, error) {
 	r.newStreamCount++
-	stream := &fakeOnlineStream{}
+	stream := &fakeOnlineStream{onAccept: r.onAccept}
 	r.streams = append(r.streams, stream)
 	return stream, nil
 }
@@ -898,7 +1020,7 @@ func (r *fakeOnlineRecognizer) Decode(stream onlineStream) error {
 }
 
 func (r *fakeOnlineRecognizer) IsReady(stream onlineStream) bool {
-	return false
+	return r.ready
 }
 
 func (r *fakeOnlineRecognizer) IsEndpoint(stream onlineStream) bool {
@@ -929,6 +1051,7 @@ type fakeOnlineStream struct {
 	closeCount         int
 	sampleRate         int
 	samples            []float32
+	onAccept           func()
 }
 
 func (s *fakeOnlineStream) AcceptWaveform(sampleRate int, samples []float32) error {
@@ -938,6 +1061,10 @@ func (s *fakeOnlineStream) AcceptWaveform(sampleRate int, samples []float32) err
 	s.acceptCount++
 	s.sampleRate = sampleRate
 	s.samples = append(s.samples, samples...)
+	if s.onAccept != nil {
+		s.onAccept()
+		s.onAccept = nil
+	}
 	return nil
 }
 

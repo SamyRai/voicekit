@@ -100,9 +100,10 @@ release scope. Full sprint evidence remains in `todo.md`.
 ### Integration-driven findings and status
 
 - **Streaming lifecycle is implemented.** `types.ASRService` exposes
-  `FinishStream`; caller audio is accepted exactly once, duration is cumulative
-  per utterance, VAD is session-owned, and final results return bounded
-  `MaxConcurrentStreams` admission slots.
+  `FinishStream`; bounded VAD pre-roll prevents delayed activation from dropping
+  speech, caller audio is accepted exactly once, duration is cumulative per
+  utterance, VAD is session-owned, and native state is closed before final or
+  failed operations return bounded `MaxConcurrentStreams` admission slots.
 - **Timing semantics are explicit.** Sherpa model tokens populate
   `Transcription.Tokens`; `Transcription.Words` is reserved for real word
   segmentation instead of relabeling subword tokens.
@@ -435,9 +436,10 @@ dependency, or new model dependency. The developer handoff guide is
   golangci-lint v2, `make verify`, Gitea Actions CI, forbidden-file
   checks, external benchmark/profile output paths, and removal of tracked
   generated benchmark artifacts plus the stray `final-test` binary archive.
-- Completed: v0.4.0 ASR streaming correctness scope with exact-once samples,
-  explicit finalization, cumulative duration, per-session VAD ownership,
-  deterministic bounded admission, idempotent shutdown, and model-native token
+- Completed: v0.4.0 ASR streaming correctness scope with bounded VAD pre-roll,
+  exact-once samples, explicit finalization, cumulative duration, per-session
+  VAD ownership, retired-session guards, deterministic bounded admission,
+  terminal native-state cleanup, idempotent shutdown, and model-native token
   timing separated from word segmentation.
 - Still open: LLM-quality analyzer implementations, export adapters for
   external tools, consent and retention policy metadata, searchable meeting

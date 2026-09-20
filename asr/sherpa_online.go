@@ -319,6 +319,27 @@ func (m *SherpaOnlineModel) closeSessionLocked(session *onlineSession) error {
 	return err
 }
 
+// discardState closes and deregisters a state-owned native stream after the
+// service aborts an utterance. It complements FinishAudio, which performs the
+// same cleanup on the normal finalization path.
+func (m *SherpaOnlineModel) discardState(state *types.StreamingState) error {
+	if state == nil || state.ASRState == nil {
+		return nil
+	}
+	session, ok := state.ASRState.(*onlineSession)
+	if !ok {
+		return closeASRState(state)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	err := m.closeSessionLocked(session)
+	if state.ASRState == session {
+		state.ASRState = nil
+	}
+	return err
+}
+
 func (m *SherpaOnlineModel) SupportsLanguage(lang string) bool {
 	if lang == "" || m.language == "" || m.language == "auto" || m.language == "multi" || m.language == "all" {
 		return true

@@ -2,6 +2,7 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -252,9 +253,12 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	session.mu.Lock()
 	finalOperation := false
 	defer func() {
-		session.mu.Unlock()
 		s.streaming.completeSessionOperation(session, finalOperation)
+		session.mu.Unlock()
 	}()
+	if session.retired {
+		return nil, newSessionError("session", sessionID, errSessionRetired)
+	}
 	state := session.State
 
 	// Add audio to buffer
@@ -265,7 +269,11 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	// Process only the newly submitted audio through the session-owned VAD.
 	// Neural detectors retain waveform state, so each session owns a distinct
 	// VADService and passes only its own incremental samples.
+	audioForASR := audio
 	if s.vadConfig != nil {
+		if session.acceptedSamples == 0 {
+			appendPendingAudio(session, audio)
+		}
 		vadService, err := s.vadForSession(session)
 		if err != nil {
 			return nil, newSessionError("vad_initialization", sessionID, err)
@@ -277,30 +285,38 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 		state.VADState = vadResult.State
 
 		if vadResult.IsEndpoint {
-			transcription, err := s.finalizeTranscription(ctx, session, audio)
+			finalOperation = true
+			if session.acceptedSamples == 0 {
+				audioForASR = pendingAudioSamples(session)
+			}
+			transcription, err := s.finalizeTranscription(ctx, session, audioForASR)
 			if err != nil {
-				finalOperation = session.acceptedSamples == 0
 				return nil, fmt.Errorf("finalization failed: %w", err)
 			}
-			finalOperation = true
 			return transcription, nil
 		}
 
-		if !vadResult.IsSpeech {
+		if session.acceptedSamples == 0 && !vadResult.IsSpeech {
 			return emptyFinalTranscription(state.Language), nil
+		}
+		if session.acceptedSamples == 0 {
+			audioForASR = pendingAudioSamples(session)
 		}
 	}
 
 	// Online recognizers consume each caller-provided chunk exactly once. The
 	// rolling buffer remains only as a compatibility fallback for custom models
 	// that do not implement finalization.
-	transcription, err := s.processWithASR(ctx, session, audio)
+	transcription, err := s.processWithASR(ctx, session, audioForASR)
 	if err != nil {
+		cleanupErr := resetSessionUtterance(session)
+		finalOperation = true
 		if s.metrics != nil && s.metrics.ErrorsTotal != nil {
 			s.metrics.ErrorsTotal.Inc()
 		}
-		return nil, newSessionError("processing", sessionID, err)
+		return nil, newSessionError("processing", sessionID, errors.Join(err, cleanupErr))
 	}
+	session.pendingAudio = nil
 
 	if s.metrics != nil {
 		if s.metrics.ProcessedChunks != nil {
@@ -312,11 +328,9 @@ func (s *Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio
 	}
 
 	if !transcription.IsPartial {
-		state.Buffer.Reset()
-		session.acceptedSamples = 0
 		finalOperation = true
-		if err := closeSessionVAD(session); err != nil {
-			return nil, newSessionError("vad_reset", sessionID, err)
+		if err := resetSessionUtterance(session); err != nil {
+			return nil, newSessionError("utterance_reset", sessionID, err)
 		}
 	}
 	return transcription, nil
@@ -351,13 +365,17 @@ func (s *Service) FinishStream(ctx context.Context, sessionID string) (*types.Tr
 	session.mu.Lock()
 	finalOperation := false
 	defer func() {
-		session.mu.Unlock()
 		s.streaming.completeSessionOperation(session, finalOperation)
+		session.mu.Unlock()
 	}()
+	if session.retired {
+		return nil, newSessionError("session", sessionID, errSessionRetired)
+	}
 
 	state := session.State
-	if session.acceptedSamples == 0 {
+	if session.acceptedSamples == 0 && state.ASRState == nil {
 		state.Buffer.Reset()
+		session.pendingAudio = nil
 		finalOperation = true
 		if err := closeSessionVAD(session); err != nil {
 			return nil, newSessionError("vad_reset", sessionID, err)
@@ -365,15 +383,14 @@ func (s *Service) FinishStream(ctx context.Context, sessionID string) (*types.Tr
 		return emptyFinalTranscription(state.Language), nil
 	}
 
+	finalOperation = true
 	transcription, err := s.finalizeTranscription(ctx, session, nil)
 	if err != nil {
-		finalOperation = session.acceptedSamples == 0
 		if s.metrics != nil && s.metrics.ErrorsTotal != nil {
 			s.metrics.ErrorsTotal.Inc()
 		}
 		return nil, newSessionError("finalization", sessionID, err)
 	}
-	finalOperation = true
 	return transcription, nil
 }
 
@@ -415,8 +432,9 @@ func (s *Service) modelForSession(session *Session, reqs *types.ModelRequirement
 	// A model change orphans any native stream the previous model created for
 	// this session; close it so the new model does not inherit a foreign stream.
 	if session.asrModel != nil && session.asrModel.Name() != model.Name() {
-		_ = closeASRState(session.State)
+		_ = closeBoundASRState(session)
 		session.acceptedSamples = 0
+		session.pendingAudio = nil
 	}
 	session.asrModel = model
 	session.asrModelLanguage = language
@@ -454,22 +472,63 @@ func (s *Service) finalizeTranscription(ctx context.Context, session *Session, f
 		return nil, err
 	}
 
-	finalResult, err := processFinalAudio(ctx, model, finalAudio, state)
-	if err != nil {
-		return nil, fmt.Errorf("finalization failed: %w", err)
+	finalResult, processErr := processFinalAudio(ctx, model, finalAudio, state)
+	cleanupErr := resetSessionUtterance(session)
+	if processErr != nil {
+		return nil, fmt.Errorf("finalization failed: %w", errors.Join(processErr, cleanupErr))
+	}
+	if cleanupErr != nil {
+		return nil, fmt.Errorf("finalization cleanup failed: %w", cleanupErr)
 	}
 
 	finalResult.IsPartial = false
 	finalResult.Timestamp = time.Now()
 
-	state.Buffer.Reset()
 	state.LastActivity = time.Now()
-	session.acceptedSamples = 0
-	if err := closeSessionVAD(session); err != nil {
-		return nil, fmt.Errorf("reset VAD after finalization: %w", err)
-	}
 
 	return finalResult, nil
+}
+
+func appendPendingAudio(session *Session, audio []float32) {
+	if session == nil || len(audio) == 0 {
+		return
+	}
+	if session.pendingAudio == nil {
+		session.pendingAudio = &vadPreRoll{}
+	}
+	session.pendingAudio.samples = append(session.pendingAudio.samples, audio...)
+	limit := session.Config.BufferSize
+	if limit > 0 && len(session.pendingAudio.samples) > limit {
+		start := len(session.pendingAudio.samples) - limit
+		copy(session.pendingAudio.samples, session.pendingAudio.samples[start:])
+		session.pendingAudio.samples = session.pendingAudio.samples[:limit]
+	}
+}
+
+func pendingAudioSamples(session *Session) []float32 {
+	if session == nil || session.pendingAudio == nil {
+		return nil
+	}
+	return session.pendingAudio.samples
+}
+
+func resetSessionUtterance(session *Session) error {
+	if session == nil {
+		return nil
+	}
+	var errs []error
+	if err := closeBoundASRState(session); err != nil {
+		errs = append(errs, fmt.Errorf("close ASR state: %w", err))
+	}
+	if err := closeSessionVAD(session); err != nil {
+		errs = append(errs, fmt.Errorf("close VAD state: %w", err))
+	}
+	if session.State != nil && session.State.Buffer != nil {
+		session.State.Buffer.Reset()
+	}
+	session.acceptedSamples = 0
+	session.pendingAudio = nil
+	return errors.Join(errs...)
 }
 
 func processFinalAudio(ctx context.Context, model Model, audio []float32, state *types.StreamingState) (*types.Transcription, error) {

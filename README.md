@@ -107,10 +107,10 @@ VoiceKit implements a modular, layered architecture for voice processing operati
 
 #### ASR Architecture
 - **Offline Transcription**: `asr.SherpaOfflineModel` maps complete audio inputs to `types.Transcription`
-- **Streaming Lifecycle**: Sherpa online recognition sends each submitted chunk to one session-owned native stream exactly once, calls `InputFinished` without replaying buffered audio, and deletes stream state on finalization/session cleanup/service close
+- **Streaming Lifecycle**: Sherpa online recognition preserves bounded VAD pre-roll, sends each utterance sample to one session-owned native stream exactly once, calls `InputFinished` without replaying accepted audio, and deletes stream state on finalization, processing failure, session cleanup, or service close
 - **Model Registry**: Dynamic model selection based on language and performance requirements
 - **Audio Buffering**: A bounded rolling buffer remains for compatibility with custom non-finalizable models; native online recognition consumes caller chunks directly
-- **VAD Integration**: Explicit `none`, `energy`, Sherpa Silero, and Sherpa TEN providers, with one stateful detector per streaming session
+- **VAD Integration**: Explicit `none`, `energy`, Sherpa Silero, and Sherpa TEN providers, with one stateful detector per streaming session and bounded pre-roll retained until speech activation
 - **Bounded Admission**: `MaxConcurrentStreams` limits active session streams; finalization returns the slot and capacity failures remain discoverable as `*asr.StreamCapacityError` through `errors.As`
 - **Timing Contract**: Sherpa tokens populate `Transcription.Tokens`; `Transcription.Words` is reserved for output that has undergone real word segmentation
 - **Test/Demo Fakes**: Fake ASR models are available only through explicit registration
@@ -975,7 +975,7 @@ Creates a new ASR service for real-time speech recognition.
 #### `(*Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio []float32) (*types.Transcription, error)`
 Processes a chunk of audio for streaming ASR, returning partial or final transcription results.
 
-VoiceKit keeps the native Sherpa online stream in session state across chunks. Each caller-provided chunk is accepted exactly once, including chunks smaller than `ChunkSize` or larger than the rolling compatibility buffer. New session streams are admitted up to `MaxConcurrentStreams`; excess admission returns a wrapped `*asr.StreamCapacityError` that callers can inspect with `errors.As`.
+VoiceKit keeps the native Sherpa online stream in session state across chunks. With VAD enabled, it retains bounded pre-roll until speech activation; after activation, each caller-provided sample is accepted exactly once, including chunks smaller than `ChunkSize` or larger than the rolling compatibility buffer. Native state is discarded before a processing error returns its admission slot. New session streams are admitted up to `MaxConcurrentStreams`; excess admission returns a wrapped `*asr.StreamCapacityError` that callers can inspect with `errors.As`.
 
 #### `(*Service) FinishStream(ctx context.Context, sessionID string) (*types.Transcription, error)`
 Finalizes the current utterance with `InputFinished` without replaying old audio, deletes native ASR/VAD state, and returns the active-stream slot. Session metadata is retained so the same ID can start a later utterance and preserve its selected language.

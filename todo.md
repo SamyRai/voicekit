@@ -8,6 +8,8 @@
 - [x] Report cumulative per-utterance online duration instead of chunk-local duration.
 - [x] Give every streaming session its own VAD detector and close it on finalization,
   removal, timeout, and service shutdown.
+- [x] Preserve bounded VAD pre-roll until speech activation; retire unlinked
+  sessions and discard native state before terminal errors return capacity.
 - [x] Make streaming-manager/service shutdown idempotent and reject sessions after close.
 - [x] Enforce `MaxConcurrentStreams` with a typed capacity error and deterministic
   admission tests.

@@ -2,6 +2,7 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -184,7 +185,7 @@ func TestFinishStreamRaceWithIdleCleanup(t *testing.T) {
 	for i := range 50 {
 		sessionID := fmt.Sprintf("race-%d", i)
 		// Seed the session with buffered audio and a native ASR stream.
-		if _, err := service.ProcessAudioChunk(ctx, sessionID, audio); err != nil {
+		if _, err := service.ProcessAudioChunk(ctx, sessionID, audio); err != nil && !errors.Is(err, errSessionRetired) {
 			t.Fatalf("seed process failed: %v", err)
 		}
 
