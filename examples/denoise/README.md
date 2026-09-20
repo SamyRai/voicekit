@@ -5,12 +5,10 @@ whole-buffer) and `denoise.SherpaStreamingDenoiser` (online, streaming/
 chunked), both backed by Sherpa ONNX's speech-enhancement models (GTCRN or
 DPDFNet). It does not ship model files.
 
-The speech denoiser is not yet wired into the root `voicekit.Config`/
-`VoiceKit`, so this example constructs `denoise.SherpaSpeechDenoiser` and
-`denoise.SherpaStreamingDenoiser` directly, and decodes the input WAV file
-with `audio.NewConverter` directly (mirroring `examples/language_id` and
-`examples/keyword_spotting`, which do the same for their not-yet-wired
-components).
+The root `voicekit.Config.Denoiser` can enable the offline denoiser in the full
+`VoiceKit.ProcessAudio` pipeline. This example constructs both the offline and
+streaming denoisers directly so it can demonstrate their individual lifecycle
+and decodes the input WAV with `audio.NewConverter`.
 
 ## Requirements
 

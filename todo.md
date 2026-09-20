@@ -1,6 +1,6 @@
 # VoiceKit Foundation Sprint Todo
 
-## ASR streaming correctness sprint (2026-09, ACTIVE)
+## ASR streaming correctness sprint (2026-09, COMPLETE — v0.4.0)
 
 - [x] Feed caller chunks to Sherpa exactly once; remove rolling-window replay and
   long-chunk truncation from the native online path.
@@ -9,12 +9,16 @@
 - [x] Give every streaming session its own VAD detector and close it on finalization,
   removal, timeout, and service shutdown.
 - [x] Make streaming-manager/service shutdown idempotent and reject sessions after close.
-- [ ] Enforce `MaxConcurrentStreams` with a typed capacity error and deterministic
+- [x] Enforce `MaxConcurrentStreams` with a typed capacity error and deterministic
   admission tests.
-- [ ] Replace token-as-word result mapping with an explicit token contract and only
+- [x] Replace token-as-word result mapping with an explicit token contract and only
   expose word timing after real word segmentation.
+- [x] Reconcile README, ASR examples, meeting guide, research note, roadmap, and
+  sprint status with the implemented v0.4.0 contracts and current repository truth.
+- [x] Pass `make verify`, model-matrix dry-run, `govulncheck`, API-diff validation,
+  and the downstream `asr_server` suite against the local checkout.
 
-## Engine Sprint (2026-07, ACTIVE) — streaming completeness & capability exposure
+## Engine Sprint (2026-07, COMPLETE) — streaming completeness & capability exposure
 
 Theme: close the streaming lifecycle, expose high-value sherpa capabilities the
 `sherpa-onnx-go` v1.13.4 binding already provides, and pay down validation/DX
@@ -48,8 +52,9 @@ P2 — engine hardening
   streaming; `denoise` package, optional stage in the full pipeline).
 - [x] Multi-online-model hosting: `OnlineModels` + per-session language routing
   (`SetSessionLanguage`), sticky per-session model binding.
-- [~] Recognizer pooling/warmup — env-gated init/first-chunk benchmarks shipped
-  (`make bench-asr-init`); warmup/pool decision gated on real-model numbers.
+- [x] Recognizer pooling/warmup decision kept evidence-gated: env-gated
+  init/first-chunk benchmarks shipped (`make bench-asr-init`); no pool was added
+  without real-model numbers.
 - [x] `evaluation` DER metric; speaker DB retention/eviction (LRU/FIFO + TTL,
   broadened triggers, root-config wiring).
 
@@ -67,7 +72,7 @@ cpu/cuda/coreml): QNN/RKNN/Ascend NPU providers — deferred, not in this sprint
 - [x] Race regression for concurrent online ASR process vs close.
 - [x] `make fetch-test-models` + broader env-gated native smoke (tooling shipped in
   the Engine Sprint P0; matrix URL/digest pinning remains a data task).
-- [ ] Stretch: speaker DB retention/eviction; measured performance pass.
+- [x] Speaker DB retention/eviction and measured performance pass.
 
 ## Baseline and Reference
 
@@ -223,7 +228,7 @@ cpu/cuda/coreml): QNN/RKNN/Ascend NPU providers — deferred, not in this sprint
 - [x] Add `scripts/check-forbidden-files.sh` and wire it into `make verify`.
 - [x] Add `.golangci.yml` with the standard correctness gate plus misspell and
   unconvert checks.
-- [x] Add `.github/workflows/ci.yml` that sets up Go from `go.mod` and runs
+- [x] Add `.gitea/workflows/ci.yml` that sets up Go from `go.mod` and runs
   `make verify`.
 - [x] Update `Makefile` with local/CI verification targets and benchmark output
   paths under `/tmp/voicekit-benchmarks` and `/tmp/voicekit-profiles`.

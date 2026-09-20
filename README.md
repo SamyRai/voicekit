@@ -14,10 +14,10 @@ A reusable Go 1.26.4 library for local voice processing experiments and audio pl
 | --- | --- | --- |
 | Audio conversion/resampling | Usable foundation | WAV/PCM encode/decode; FLAC/MP3/Ogg-Vorbis decode via pure-Go libraries. AAC/M4A and compressed encoding return explicit unsupported errors. |
 | Speaker recognition | Experimental but real | Sherpa speaker embedding model path and speaker data directory. Speaker embedding streams are single-use and released after extraction. |
-| ASR | Sherpa offline transcriber plus Sherpa online streaming service | Offline or online Sherpa model files. ASR enabled without required backend paths is a validation error. |
+| ASR | Sherpa offline transcriber plus bounded Sherpa online streaming service | Offline or online Sherpa model files. Streaming admission enforces `MaxConcurrentStreams`; model-native token timing is exposed separately from real word segmentation. |
 | VAD | Runtime seam with explicit providers | `none`, `energy`, or Sherpa Silero/TEN with a configured model path. |
 | Diarization | Sherpa offline diarization backend | Segmentation and embedding model paths. The old silence/clustering path is an explicit `basic` backend for tests/local experiments. |
-| TTS | Sherpa offline speech synthesizer | VITS, Matcha, Kokoro, KittenTTS, ZipVoice, Pocket, or Supertonic model files. TTS enabled without required backend paths is a validation error. |
+| TTS | Sherpa offline and streaming speech synthesis | VITS, Matcha, Kokoro, KittenTTS, ZipVoice, Pocket, or Supertonic model files. TTS enabled without required backend paths is a validation error. |
 | Meeting intelligence | Product-domain foundation | Typed meeting artifacts, deterministic mapping from diarized ASR output, Markdown/JSON/SRT/WebVTT exports, export-time redaction enforcement, provider-neutral analysis, a stdlib-only reference analyzer, and deterministic evaluation metrics. |
 
 For the developer handoff guide covering meeting data flow, analyzer extension
@@ -36,18 +36,14 @@ records the recommended choices and their sources:
 - **Diarization**: pyannote segmentation-3.0 (or 4.0 community-1) + 3D-Speaker CAM++.
 - **TTS**: Kokoro-82M as the efficiency default.
 
-Runs on sherpa-onnx-go v1.13.4 (ONNX Runtime 1.27). Build with Go 1.26.5 in CI/Docker.
+Runs on sherpa-onnx-go v1.13.4 (ONNX Runtime 1.27). Local and CI verification use the Go 1.26.4 module floor.
 
 ## Installation
 
-Copy the `voicekit` directory to your project and add it to your Go module:
+Add the released module to your project:
 
 ```bash
-# Add to your project
-cp -r voicekit /path/to/your/project/
-
-# Update your go.mod if needed
-go mod tidy
+go get go.glpx.pro/voicekit@v0.4.0
 ```
 
 ## Architecture Overview
@@ -115,13 +111,15 @@ VoiceKit implements a modular, layered architecture for voice processing operati
 - **Model Registry**: Dynamic model selection based on language and performance requirements
 - **Audio Buffering**: A bounded rolling buffer remains for compatibility with custom non-finalizable models; native online recognition consumes caller chunks directly
 - **VAD Integration**: Explicit `none`, `energy`, Sherpa Silero, and Sherpa TEN providers, with one stateful detector per streaming session
+- **Bounded Admission**: `MaxConcurrentStreams` limits active session streams; finalization returns the slot and capacity failures remain discoverable as `*asr.StreamCapacityError` through `errors.As`
+- **Timing Contract**: Sherpa tokens populate `Transcription.Tokens`; `Transcription.Words` is reserved for output that has undergone real word segmentation
 - **Test/Demo Fakes**: Fake ASR models are available only through explicit registration
 
 #### Diarization Architecture
 - **Backend Boundary**: `diarization.Backend` owns native processing and lifecycle
 - **Sherpa Offline Backend**: Uses Sherpa segmentation, embedding, clustering, and min-duration settings
 - **Basic Backend**: Keeps the old silence-plus-embedding clustering path available only by explicit `BackendBasic`
-- **Integration**: Time-based alignment between audio segments and ASR word timestamps
+- **Integration**: Time-based alignment between audio segments and genuine word timestamps when an upstream recognizer or segmenter provides them
 
 #### TTS Architecture
 - **Offline Synthesis**: `tts.SherpaOfflineSynthesizer` maps text requests to Sherpa-generated float32 PCM samples
@@ -137,6 +135,9 @@ constructor re-exported at the root, and an env-gated example under `examples/`.
 - **Streaming ASR finalization**: `ASRService.FinishStream(ctx, sessionID)` forces
   a final hypothesis (native `InputFinished` + flush-decode) at a caller-chosen
   utterance boundary instead of waiting for a VAD endpoint.
+- **Streaming admission and timing**: new active sessions are bounded by
+  `MaxConcurrentStreams`; Sherpa token text/timing is exposed through
+  `Transcription.Tokens` without labeling subword tokens as words.
 - **Streaming TTS**: `tts.SherpaStreamingSynthesizer` (`voicekit.NewStreamingSynthesizer`)
   implements `types.StreamingSynthesizer`, delivering audio chunks via a sink
   callback (return `false` to interrupt) with progress. Example: `examples/tts_streaming`.
@@ -373,7 +374,7 @@ type Logger interface {
 ### Meeting Intelligence
 - **Reference Analyzer**: `meeting.HeuristicAnalyzer` is a deterministic baseline for local examples and tests, not an LLM-quality summarizer.
 - **Redaction Scope**: The built-in redactor covers emails, phone-like numbers, URLs, and configured literal terms. It is not a complete privacy, consent, retention, or compliance system.
-- **Evaluation Scope**: The `evaluation` package provides deterministic fixture metrics. It does not yet include DER, model-backed benchmark corpora, or hosted-provider comparisons.
+- **Evaluation Scope**: The `evaluation` package provides deterministic WER/CER, speaker attribution, action-item, real-time-factor, and diarization-error-rate metrics. It does not yet include model-backed benchmark corpora or hosted-provider comparisons.
 
 ### Memory Management
 - **Large Files**: Memory usage scales linearly with audio duration
@@ -472,11 +473,13 @@ package main
 
 import (
     "context"
+    "errors"
     "fmt"
     "log"
     "time"
 
     "go.glpx.pro/voicekit"
+    voiceasr "go.glpx.pro/voicekit/asr"
 )
 
 func main() {
@@ -524,6 +527,11 @@ func main() {
         // Process chunk through ASR
         transcription, err := asrService.ProcessAudioChunk(ctx, sessionID, audioChunk)
         if err != nil {
+            var capacityErr *voiceasr.StreamCapacityError
+            if errors.As(err, &capacityErr) {
+                log.Printf("ASR capacity reached (%d/%d)", capacityErr.Active, capacityErr.Limit)
+                break
+            }
             log.Printf("ASR processing error: %v", err)
             continue
         }
@@ -542,6 +550,11 @@ func main() {
         time.Sleep(100 * time.Millisecond)
     }
 
+    final, err := asrService.FinishStream(ctx, sessionID)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Final: %s\n", final.Text)
     fmt.Println("ASR streaming session completed")
 }
 
@@ -945,6 +958,9 @@ Computes word and character edit-distance metrics using stable normalization.
 #### `evaluation.EvaluateSpeakerAttribution(reference []evaluation.ReferenceTurn, prediction []meeting.TranscriptTurn) evaluation.SpeakerAttributionReport`
 Compares speaker IDs by transcript turn ID with index fallback for fixture data that omits IDs.
 
+#### `evaluation.EvaluateDiarization(reference, hypothesis []evaluation.DiarizationSegment, options evaluation.DiarizationOptions) (evaluation.DiarizationReport, error)`
+Computes diarization error rate with optimal speaker mapping, missed speech, false alarm, and confusion components. Optional boundary collars and overlap skipping follow common md-eval/pyannote-style evaluation controls.
+
 #### `evaluation.EvaluateActionItems(reference []meeting.ActionItem, prediction []meeting.ActionItem) evaluation.ClassificationReport`
 Scores extracted action items with exact normalized text matching.
 
@@ -959,7 +975,13 @@ Creates a new ASR service for real-time speech recognition.
 #### `(*Service) ProcessAudioChunk(ctx context.Context, sessionID string, audio []float32) (*types.Transcription, error)`
 Processes a chunk of audio for streaming ASR, returning partial or final transcription results.
 
-VoiceKit keeps the native Sherpa online stream in session state across chunks. Each caller-provided chunk is accepted exactly once, including chunks smaller than `ChunkSize` or larger than the rolling compatibility buffer. Finalization calls `InputFinished` without submitting old audio again, deletes the stream, and clears the session ASR and VAD state so a later utterance starts fresh.
+VoiceKit keeps the native Sherpa online stream in session state across chunks. Each caller-provided chunk is accepted exactly once, including chunks smaller than `ChunkSize` or larger than the rolling compatibility buffer. New session streams are admitted up to `MaxConcurrentStreams`; excess admission returns a wrapped `*asr.StreamCapacityError` that callers can inspect with `errors.As`.
+
+#### `(*Service) FinishStream(ctx context.Context, sessionID string) (*types.Transcription, error)`
+Finalizes the current utterance with `InputFinished` without replaying old audio, deletes native ASR/VAD state, and returns the active-stream slot. Session metadata is retained so the same ID can start a later utterance and preserve its selected language.
+
+#### `types.Transcription` timing contract
+Sherpa online and offline results expose model-native token text and timing through `Tokens []types.Token`. A token may be a character, subword, or word depending on the model. `Token.HasTiming` distinguishes a real zero start from missing timing, and offline token duration is retained when Sherpa supplies it. `Words []types.Word` is intentionally empty unless a recognizer or downstream stage performs real word segmentation.
 
 #### `(*Service) RegisterModel(model asr.Model) error`
 Registers a new ASR model with the service.
@@ -979,7 +1001,7 @@ Closes the ASR service and releases all resources.
 Creates a Sherpa offline transcriber for complete audio inputs.
 
 #### `(*SherpaOfflineModel) Transcribe(ctx context.Context, audio []float32, sampleRate int) (*types.Transcription, error)`
-Transcribes a complete audio buffer with non-empty audio validation before native Sherpa calls.
+Transcribes a complete audio buffer with non-empty audio validation before native Sherpa calls. Native Sherpa token metadata is returned in `Transcription.Tokens`; it is not presented as word segmentation.
 
 ### TTS Offline
 
@@ -1048,7 +1070,7 @@ type ASRConfig struct {
     DefaultModel         string  // Default model/transcriber name
     Language             string  // Default language ("en")
     Quantization         string  // Informational quantization label
-    MaxConcurrentStreams int     // Reserved admission limit; validation exists, enforcement is pending
+    MaxConcurrentStreams int     // Hard limit for active streaming session admissions
     StreamTimeout        int     // Stream timeout in seconds
     ChunkSize            int     // Audio chunk size in samples (16000 = 1 second at 16kHz)
     SampleRate           int     // ASR sample rate
@@ -1193,9 +1215,9 @@ wget https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition
 Speaker embedding extraction creates a new Sherpa stream per extraction. Do not reuse streams after `InputFinished`; VoiceKit deletes them immediately after computing the embedding.
 
 ### Audio Format Support
-- **Input**: WAV and PCM
+- **Input**: WAV, PCM, FLAC, MP3, and Ogg-Vorbis
 - **Output**: WAV and PCM
-- **Unsupported**: FLAC, MP3, OGG, M4A, and AAC return explicit errors
+- **Unsupported**: AAC/M4A input and compressed output return explicit errors
 
 ## Testing Strategy
 
@@ -1220,7 +1242,7 @@ make verify
 `make verify` checks forbidden tracked artifacts, verifies modules, checks
 `gofmt`, verifies `go mod tidy`, runs `golangci-lint`, `go vet ./...`,
 `go test ./...`, and `go test -race ./...` when the local platform supports
-the race detector. The CI workflow in `.github/workflows/ci.yml` uses
+the race detector. The Gitea Actions workflow in `.gitea/workflows/ci.yml` uses
 `actions/setup-go` with `go-version-file: go.mod` and delegates to
 `make verify`, so local and remote gates stay aligned.
 

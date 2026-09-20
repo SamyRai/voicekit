@@ -61,7 +61,7 @@ Current strengths:
 - Measured Go 1.26.4 local CPU performance baseline with optimized WAV/PCM
   decode, basic diarization segmentation, and benchmark coverage for
   meeting/evaluation surfaces.
-- Repository hygiene and CI guardrails: GitHub/Gitea-compatible workflow,
+- Repository hygiene and CI guardrails: Gitea Actions workflow,
   `make verify`, golangci-lint v2 config, forbidden-file checks, and ignored
   local benchmark/model/runtime artifacts.
 - Focused tests, race validation, and env-gated model integration tests.
@@ -77,7 +77,8 @@ Current product gaps:
 - No DOCX, Google Docs, email recap, Slack, Jira, Asana, Notion, Salesforce, or
   HubSpot export adapters beyond the current Markdown, JSON, SRT, and WebVTT
   exports.
-- No glossary, hotword, custom vocabulary, or transcript cleanup policy surface.
+- No ASR glossary/custom-vocabulary or transcript-cleanup policy surface;
+  keyword spotting is available as a separate streaming capability.
 - No full privacy/consent/retention layer; deterministic PII-style redaction is
   available before export but is not a compliance guarantee.
 - No searchable meeting memory or cross-meeting retrieval.
@@ -89,63 +90,59 @@ Current product gaps:
 
 ## Engine Track — Streaming Completeness & Capability Exposure (2026-07)
 
-Complements the product initiatives below. These are the core Sherpa-backed
-engine priorities: close the streaming lifecycle, expose high-value capabilities
-the `sherpa-onnx-go` v1.13.4 binding already provides but voicekit does not yet
-wrap, and pay down validation/DX debt surfaced by the first real downstream
-integration (asr_server). Full sprint task list in `todo.md`.
+This historical track complemented the product initiatives below. Its completed
+scope closed the core Sherpa streaming lifecycle, exposed the high-value binding
+capabilities selected for VoiceKit, and paid down validation/DX debt surfaced by
+the first real downstream integration (`asr_server`). The September correctness
+sprint completed admission control and truthful token timing for the v0.4.0
+release scope. Full sprint evidence remains in `todo.md`.
 
 ### Integration-driven findings and status
 
-- **Finalization and sample ownership are implemented.** `types.ASRService`
-  exposes `FinishStream`; the September 2026 hardening pass also removed
-  rolling-window replay/truncation, made duration cumulative per utterance, and
-  gave each session its own stateful VAD detector. The remaining downstream
-  work is adopting `FinishStream` instead of forcing partial results final.
-- **Provider-name footgun.** `silero` vs `silero_vad` (and similar) silently
-  falls through to a nil detector instead of erroring — a downstream native
-  smoke test passed without ever loading Silero. Provider names need validation
-  or aliasing with a loud error on the unknown case.
-- **Multilingual Kokoro needs `lang`/`lexicon`.** Kokoro ≥ v1.0 rejects synthesis
-  without one; the config carries the fields but nothing guides or validates them.
+- **Streaming lifecycle is implemented.** `types.ASRService` exposes
+  `FinishStream`; caller audio is accepted exactly once, duration is cumulative
+  per utterance, VAD is session-owned, and final results return bounded
+  `MaxConcurrentStreams` admission slots.
+- **Timing semantics are explicit.** Sherpa model tokens populate
+  `Transcription.Tokens`; `Transcription.Words` is reserved for real word
+  segmentation instead of relabeling subword tokens.
+- **Provider validation is implemented.** VAD aliases such as
+  `silero`→`silero_vad` normalize explicitly, unknown providers fail loudly, and
+  multilingual Kokoro validates its language/lexicon requirements.
 - **Nemotron online decoding is greedy-only** (no hotwords). Hotword/glossary
   support must be explicit about model-family limits.
 
-### Confirmed wrappable now (Go binding present; voicekit does not wrap)
+### Capability exposure status
 
-Verified against the sherpa-onnx-go v1.13.4 binding source: `KeywordSpotter`,
-`OnlinePunctuation`/`OfflinePunctuation`, `SpeechDenoiser`/`OfflineSpeechDenoiser`,
-`SpokenLanguageIdentification`, `SourceSeparation`, `AudioTagging`, and
-**streaming TTS** via the `GeneratedAudio` per-chunk callback
-(`_cgoGeneratedAudioCallback`). NOT in the Go binding (C++-core only — needs a
-`sherpa-onnx-go` binding contribution, do not plan as a simple wrap):
-**QNN/RKNN/Ascend NPU providers** (Go exposes only cpu/cuda/coreml).
+VoiceKit now wraps `KeywordSpotter`, offline punctuation, online/offline speech
+denoising, `SpokenLanguageIdentification`, and streaming TTS through Sherpa's
+generated-audio callback. `SourceSeparation` and `AudioTagging` remain optional
+future wrappers. QNN/RKNN/Ascend NPU providers are still not exposed by the Go
+binding (which exposes cpu/cuda/coreml), so they require upstream binding work
+and are not a simple VoiceKit wrapper.
 
 ### Prioritized objectives
 
-**P0 — streaming lifecycle + validation**
-1. Public `FinishStream(ctx, sessionID) (*Transcription, error)` on
-   `types.ASRService` + `asr.Service`, backed by a real
-   `SherpaOnlineModel.FinishAudio` (`InputFinished` + flush-decode). Deterministic
-   non-empty finals; unblocks downstream WER. (Breaking interface change — allowed.)
-2. `make fetch-test-models` + env-gated native smoke across ASR/VAD/TTS/
-   diarization/speaker, digest-pinned off `testdata/model_matrix.yaml` (the
-   pattern proven downstream in asr_server). Closes the open `todo.md` item.
-3. Provider-name validation/aliasing (VAD/TTS/ASR) — reject or normalize unknown
-   providers loudly; validate multilingual-Kokoro `lang`/`lexicon`.
+**P0 — streaming lifecycle + validation (completed)**
+1. Public `FinishStream`, exact-once sample ownership, per-session VAD, bounded
+   admission, and model-native token timing.
+2. `make fetch-test-models` plus env-gated native smoke across
+   ASR/VAD/TTS/diarization/speaker, driven by `testdata/model_matrix.yaml`.
+3. Provider-name validation/aliasing plus multilingual-Kokoro validation.
 
-**P1 — capability exposure (confirmed wrappable)**
+**P1 — capability exposure (completed)**
 4. Streaming TTS (`StreamingSynthesizer` over the GeneratedAudio callback;
    chunked, interruptible).
 5. Punctuation restoration (post-ASR normalizer).
 6. Keyword spotting (streaming wake-word/hotword).
 7. Spoken language identification (auto language routing).
 
-**P2 — engine hardening**
+**P2 — engine hardening (completed or evidence-gated)**
 8. Speech denoiser preprocessing stage (optional, before VAD/ASR).
 9. Multi-online-model hosting (relax the single-backend-per-instance constraint
    so one service can host more than one online model).
-10. Recognizer pooling/warmup — only after a benchmark shows the init cost.
+10. Recognizer init/first-chunk benchmark shipped; pooling remains intentionally
+    deferred until real-model measurements justify it.
 11. `evaluation` DER metric; speaker DB retention/eviction (existing stretch).
 
 Deferred/strategic (see Later): source separation, audio tagging, overlap-aware
@@ -360,12 +357,15 @@ Effort: Medium to Large.
 
 ### Now
 
-- **Engine Track P0** (see the section above): ship public `FinishStream`,
-  `make fetch-test-models` + native smoke, and provider-name validation. These
-  are the core-engine gaps a real downstream integration hit first.
+- Adopt the v0.4.0 `FinishStream`, bounded-admission, and `Tokens` contracts in
+  downstream services; add word segmentation only where a consumer actually
+  requires word-level alignment.
+- Capture real-model ASR init, first-token, WER, and long-session measurements
+  before adding recognizer pooling or changing defaults.
 - Expand evaluation fixtures toward realistic meetings, noisy calls,
   multilingual calls, and overlapping speakers.
-- Add DER-focused diarization evaluation and latency/memory benchmark reports.
+- Expand the implemented DER metric with representative diarization benchmark
+  corpora and add latency/memory reports.
 - Keep performance decisions tied to Go 1.26.4 benchstat output in
   `/tmp/voicekit-benchmarks` and avoid tracked one-off benchmark artifacts.
 - Keep `make verify` as the local and CI source of truth for formatting, lint,
@@ -432,12 +432,16 @@ dependency, or new model dependency. The developer handoff guide is
   union-find clustering for current sizes, real root benchmarks, and
   meeting/evaluation benchmark coverage.
 - Completed: repository maintenance baseline with `.gitignore`,
-  golangci-lint v2, `make verify`, GitHub/Gitea-compatible CI, forbidden-file
+  golangci-lint v2, `make verify`, Gitea Actions CI, forbidden-file
   checks, external benchmark/profile output paths, and removal of tracked
   generated benchmark artifacts plus the stray `final-test` binary archive.
+- Completed: v0.4.0 ASR streaming correctness scope with exact-once samples,
+  explicit finalization, cumulative duration, per-session VAD ownership,
+  deterministic bounded admission, idempotent shutdown, and model-native token
+  timing separated from word segmentation.
 - Still open: LLM-quality analyzer implementations, export adapters for
   external tools, consent and retention policy metadata, searchable meeting
-  memory, DER-focused evaluation, latency dashboards, and real
+  memory, DER benchmark corpora, latency dashboards, and real
   capture/ingestion adapters.
 
 ## Source Notes
