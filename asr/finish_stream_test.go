@@ -169,7 +169,7 @@ func TestFinishStreamRaceWithIdleCleanup(t *testing.T) {
 	recognizer := &fakeOnlineRecognizer{}
 	model := newSherpaOnlineModelForTest(recognizer)
 
-	service := newTestService()
+	service := newTestServiceWithCapacity(50)
 	service.config.DefaultModel = model.Name()
 	defer service.Close()
 	if err := service.RegisterModel(model); err != nil {
