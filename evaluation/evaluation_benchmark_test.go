@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"go.glpx.pro/voicekit/meeting"
+	"go.glpx.pro/gdk/voice/meeting"
 )
 
 var benchmarkReportSink Report

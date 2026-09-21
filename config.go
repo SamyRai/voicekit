@@ -5,11 +5,11 @@ import (
 	"os"
 	"time"
 
-	"go.glpx.pro/voicekit/asr"
-	"go.glpx.pro/voicekit/denoise"
-	"go.glpx.pro/voicekit/diarization"
-	"go.glpx.pro/voicekit/speaker"
-	"go.glpx.pro/voicekit/tts"
+	"go.glpx.pro/gdk/voice/asr"
+	"go.glpx.pro/gdk/voice/denoise"
+	"go.glpx.pro/gdk/voice/diarization"
+	"go.glpx.pro/gdk/voice/speaker"
+	"go.glpx.pro/gdk/voice/tts"
 )
 
 // Config represents the main configuration for voicekit

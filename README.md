@@ -43,7 +43,7 @@ Runs on sherpa-onnx-go v1.13.8 (ONNX Runtime 1.28.2). Local and CI verification 
 Add the released module to your project:
 
 ```bash
-go get go.glpx.pro/voicekit@v0.4.2
+go get go.glpx.pro/gdk/voice@v0.4.2
 ```
 
 ## Architecture Overview
@@ -408,9 +408,9 @@ import (
     "fmt"
     "log"
 
-    "go.glpx.pro/voicekit"
-    "go.glpx.pro/voicekit/audio"
-    "go.glpx.pro/voicekit/speaker"
+    "go.glpx.pro/gdk/voice"
+    "go.glpx.pro/gdk/voice/audio"
+    "go.glpx.pro/gdk/voice/speaker"
 )
 
 func main() {
@@ -478,8 +478,8 @@ import (
     "log"
     "time"
 
-    "go.glpx.pro/voicekit"
-    voiceasr "go.glpx.pro/voicekit/asr"
+    "go.glpx.pro/gdk/voice"
+    voiceasr "go.glpx.pro/gdk/voice/asr"
 )
 
 func main() {
@@ -575,7 +575,7 @@ import (
     "context"
     "log"
 
-    "go.glpx.pro/voicekit"
+    "go.glpx.pro/gdk/voice"
 )
 
 func main() {
@@ -616,7 +616,7 @@ import (
     "context"
     "log"
 
-    "go.glpx.pro/voicekit"
+    "go.glpx.pro/gdk/voice"
 )
 
 func main() {
@@ -656,7 +656,7 @@ func main() {
 package main
 
 import (
-    "go.glpx.pro/voicekit/speaker"
+    "go.glpx.pro/gdk/voice/speaker"
 )
 
 func main() {
@@ -701,7 +701,7 @@ func main() {
 package main
 
 import (
-    "go.glpx.pro/voicekit/audio"
+    "go.glpx.pro/gdk/voice/audio"
 )
 
 func main() {
@@ -743,7 +743,7 @@ func main() {
 package main
 
 import (
-    "go.glpx.pro/voicekit/diarization"
+    "go.glpx.pro/gdk/voice/diarization"
 )
 
 func main() {
@@ -1582,9 +1582,9 @@ This library is released under the MIT License. See LICENSE file for details.
 
 When migrating from the original ASR server's internal packages:
 
-1. Replace `internal/speaker` imports with `go.glpx.pro/voicekit/speaker`
-2. Replace `internal/audio` imports with `go.glpx.pro/voicekit/audio`
-3. Replace `internal/diarization` imports with `go.glpx.pro/voicekit/diarization`
+1. Replace `internal/speaker` imports with `go.glpx.pro/gdk/voice/speaker`
+2. Replace `internal/audio` imports with `go.glpx.pro/gdk/voice/audio`
+3. Replace `internal/diarization` imports with `go.glpx.pro/gdk/voice/diarization`
 4. Update configuration structures to use `voicekit.Config`
 5. Remove dependencies on `internal/logger` and `internal/config`
 
@@ -1595,5 +1595,5 @@ Example migration:
 import "asr_server/internal/speaker"
 
 // After
-import "go.glpx.pro/voicekit/speaker"
+import "go.glpx.pro/gdk/voice/speaker"
 ```

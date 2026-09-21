@@ -3,7 +3,7 @@ package voicekit
 import (
 	"testing"
 
-	"go.glpx.pro/voicekit/audio"
+	"go.glpx.pro/gdk/voice/audio"
 )
 
 func TestVoiceKitNilConfigIsAudioOnly(t *testing.T) {

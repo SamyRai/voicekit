@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"go.glpx.pro/voicekit/speaker/domain"
+	"go.glpx.pro/gdk/voice/speaker/domain"
 )
 
 // SherpaEmbeddingExtractorAdapter adapts the existing Sherpa embedding extractor to the domain interface

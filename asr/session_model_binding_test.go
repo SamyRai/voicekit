@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"go.glpx.pro/voicekit/types"
+	"go.glpx.pro/gdk/voice/types"
 )
 
 // asrStateModel is a fake model that installs a closeable value into

@@ -1,4 +1,4 @@
-module go.glpx.pro/voicekit
+module go.glpx.pro/gdk/voice
 
 go 1.26.4
 

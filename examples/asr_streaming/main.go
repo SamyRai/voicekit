@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"go.glpx.pro/voicekit"
+	"go.glpx.pro/gdk/voice"
 )
 
 func main() {

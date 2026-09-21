@@ -7,7 +7,7 @@ import (
 	"os"
 	"strconv"
 
-	"go.glpx.pro/voicekit/asr"
+	"go.glpx.pro/gdk/voice/asr"
 )
 
 func main() {

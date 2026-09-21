@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"go.glpx.pro/voicekit/speaker/application"
-	"go.glpx.pro/voicekit/speaker/domain"
+	"go.glpx.pro/gdk/voice/speaker/application"
+	"go.glpx.pro/gdk/voice/speaker/domain"
 )
 
 // newRetentionTestManager builds a fully wired *Manager over a hermetic,

@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.glpx.pro/voicekit/speaker/domain"
+	"go.glpx.pro/gdk/voice/speaker/domain"
 )
 
 // GetSpeakerEmbedding returns the embedding for a specific speaker

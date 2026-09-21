@@ -7,7 +7,7 @@ import (
 	"time"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
-	"go.glpx.pro/voicekit/types"
+	"go.glpx.pro/gdk/voice/types"
 )
 
 // SherpaOfflineModel implements batch ASR with Sherpa ONNX OfflineRecognizer.

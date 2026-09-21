@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"time"
 
-	voiceasr "go.glpx.pro/voicekit/asr"
-	"go.glpx.pro/voicekit/audio"
-	"go.glpx.pro/voicekit/denoise"
-	"go.glpx.pro/voicekit/diarization"
-	"go.glpx.pro/voicekit/speaker"
-	voicetts "go.glpx.pro/voicekit/tts"
-	"go.glpx.pro/voicekit/types"
+	voiceasr "go.glpx.pro/gdk/voice/asr"
+	"go.glpx.pro/gdk/voice/audio"
+	"go.glpx.pro/gdk/voice/denoise"
+	"go.glpx.pro/gdk/voice/diarization"
+	"go.glpx.pro/gdk/voice/speaker"
+	voicetts "go.glpx.pro/gdk/voice/tts"
+	"go.glpx.pro/gdk/voice/types"
 )
 
 // VoiceKit provides a unified interface for all voice processing operations

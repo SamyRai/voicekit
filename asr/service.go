@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"go.glpx.pro/voicekit/types"
+	"go.glpx.pro/gdk/voice/types"
 )
 
 // Service provides real-time streaming ASR functionality

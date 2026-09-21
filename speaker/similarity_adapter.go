@@ -3,7 +3,7 @@ package speaker
 import (
 	"math"
 
-	"go.glpx.pro/voicekit/speaker/domain"
+	"go.glpx.pro/gdk/voice/speaker/domain"
 )
 
 // CosineSimilarityCalculator implements the domain similarity calculator using cosine similarity

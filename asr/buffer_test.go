@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"go.glpx.pro/voicekit/types"
+	"go.glpx.pro/gdk/voice/types"
 )
 
 func TestAudioBuffer_Append(t *testing.T) {

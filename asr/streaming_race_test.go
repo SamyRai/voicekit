@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"go.glpx.pro/voicekit/types"
+	"go.glpx.pro/gdk/voice/types"
 )
 
 // TestSherpaOnlineModelConcurrentProcessAndCloseIsRaceFree drives many concurrent

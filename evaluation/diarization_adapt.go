@@ -3,7 +3,7 @@ package evaluation
 import (
 	"strings"
 
-	"go.glpx.pro/voicekit/meeting"
+	"go.glpx.pro/gdk/voice/meeting"
 )
 
 // DiarizationSegmentsFromReferenceTurns adapts reviewed reference transcript

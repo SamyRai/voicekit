@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"go.glpx.pro/voicekit/types"
+	"go.glpx.pro/gdk/voice/types"
 )
 
 var errSessionRetired = errors.New("streaming session is no longer active")

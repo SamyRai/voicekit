@@ -3,7 +3,7 @@ package asr
 import (
 	"sync"
 
-	"go.glpx.pro/voicekit/types"
+	"go.glpx.pro/gdk/voice/types"
 )
 
 // AudioBuffer implements the AudioBufferInterface with circular buffer optimization
