@@ -43,7 +43,7 @@ Runs on sherpa-onnx-go v1.13.8 (ONNX Runtime 1.28.2). Local and CI verification 
 Add the released module to your project:
 
 ```bash
-go get go.glpx.pro/voicekit@v0.4.1
+go get go.glpx.pro/voicekit@v0.4.2
 ```
 
 ## Architecture Overview
