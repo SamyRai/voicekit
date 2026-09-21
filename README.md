@@ -36,14 +36,14 @@ records the recommended choices and their sources:
 - **Diarization**: pyannote segmentation-3.0 (or 4.0 community-1) + 3D-Speaker CAM++.
 - **TTS**: Kokoro-82M as the efficiency default.
 
-Runs on sherpa-onnx-go v1.13.4 (ONNX Runtime 1.27). Local and CI verification use the Go 1.26.4 module floor.
+Runs on sherpa-onnx-go v1.13.8 (ONNX Runtime 1.28.2). Local and CI verification use the Go 1.26.4 module floor.
 
 ## Installation
 
 Add the released module to your project:
 
 ```bash
-go get go.glpx.pro/voicekit@v0.4.0
+go get go.glpx.pro/voicekit@v0.4.1
 ```
 
 ## Architecture Overview

@@ -45,4 +45,4 @@ If the required model/keyword environment variables are not set, the example exi
 ## Notes
 
 - Each `sessionID` passed to `Spot` keeps its own native decode stream. Call `EndSession(sessionID)` to release a single session's stream when you are done with it (important if you use a fresh `sessionID` per utterance), or `Close()` to release all streams and the spotter.
-- `KeywordMatch.Score` is always `0`: the Sherpa v1.13.4 binding's `KeywordSpotterResult` exposes only the matched keyword text, not a calibrated confidence value.
+- `KeywordMatch.Score` is always `0`: the Sherpa v1.13.8 binding's `KeywordSpotterResult` exposes only the matched keyword text, not a calibrated confidence value.
